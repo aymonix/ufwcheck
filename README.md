@@ -40,7 +40,7 @@ We provide an automated installer script to make setup as quick and easy as poss
     ./install.sh
     ```
 
-> For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/MANUAL_INSTALLATION.md)**.
+> For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/installation.md)**.
 
 > *Note: `install.sh` is intended for initial installation. Please read the FAQ for details on re-running the script.*
 
@@ -148,63 +148,16 @@ The installer offers to set up a weekly `cron` job to run this command automatic
 
 ## Troubleshooting
 
-#### General Issues
-*   **Error:** `bash: ufwcheck: command not found`
-    *   **Cause:** Your shell has not yet loaded the new environment settings.
-    *   **Solution:** Ensure you have added the `source "$HOME/.config/ufwcheck/env.sh"` line to your `~/.bashrc` (or `~/.zshrc`) and then **restarted your terminal** or run `source ~/.bashrc`.
+If you encounter any issues during installation or usage, we have prepared a comprehensive troubleshooting guide.
 
-#### `ufwcheck` Errors
+➡️ Click here to view the **[Troubleshooting Guide](docs/troubleshooting.md)**
 
-*   **Error:** `[✘] Error: Required command not found: 'jq'. Please install it.`
-    *   **Cause:** A required utility (e.g., `jq`) is missing from the system.
-    *   **Solution:** Install the missing package. For Debian/Ubuntu, the package list is in the `## Prerequisites` section.
-
-*   **Error:** `[✘] Error: Configuration file not found at '~/.config/ufwcheck/config.sh'`
-    *   **Cause:** The main configuration file is missing or in the wrong location.
-    *   **Solution:** Ensure the installation was successful. If you performed a manual installation, create this file at the specified path.
-
-*   **Error:** `[✘] Error: UFW log file not found or not readable...`
-    *   **Cause:** The path to the UFW log is incorrect, or your user lacks permission to read it.
-    *   **Solution:** Check the `LOG_FILE` path in your config. The system log `/var/log/ufw.log` often requires administrator privileges (`root`) or membership in the `adm` group. Ensure your user is in the `adm` group (`sudo usermod -aG adm $USER`) or consult your system administrator.
-
-*   **Error:** `[✘] Error: GeoIP database not found or not readable...`
-    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet. The `install.sh` script only prepares for the download.
-    *   **Solution:** You need to run `geoupdate` for the first time to download the database. If you installed manually, ensure you have downloaded the database and placed it at the path specified in `MMDB_FILE`.
-
-*   **Error:** `[✘] Error: The value for '...' must be a positive integer...`
-    *   **Cause:** You provided a non-numeric or negative value to an option (`--top`, `--days`, `--attempts`).
-    *   **Solution:** Use only positive integers (e.g., `1`, `10`, `100`).
-
-*   **Error:** `[✘] Error: Invalid month abbreviation...` or `...Date must be in YYYY-MM-DD format...`
-    *   **Cause:** The date or month format is incorrect.
-    *   **Solution:** Use three-letter English abbreviations (`Jan`, `Feb`, etc.) for the month or the `YYYY-MM-DD` format for the date.
-
-#### `geoupdate` Errors
-
-*   **Error:** `ERROR: Cannot read config file: '~/.config/maxmind/config.sh'`
-    *   **Cause:** The MaxMind configuration loader is missing.
-    *   **Solution:** Ensure the installation was successful and the file exists.
-
-*   **Error:** `source: ~/.config/maxmind/secrets: No such file or directory`
-    *   **Cause:** You chose the manual setup option and did not create the credentials file.
-    *   **Solution:** Create the `~/.config/maxmind/secrets` file and place your **MaxMind Account ID** and **License Key** in it, as shown during the installation.
-
-*   **Error:** `ERROR: MAXMIND_ID or MAXMIND_TOKEN is not exported...`
-    *   **Cause:** The `secrets` file exists, but the variables are defined incorrectly.
-    *   **Solution:** Check `~/.config/maxmind/secrets`. Make sure the lines begin with `export`.
-
-*   **Error:** `curl: (22) The requested URL returned error: 401 Unauthorized`
-    *   **Cause:** Your **Account ID** or **License Key** is incorrect.
-    *   **Solution:** Verify the credentials in your `~/.config/maxmind/secrets` file.
-
-*   **Error:** `ERROR: SHA256 mismatch!`
-    *   **Cause:** The downloaded archive is corrupt.
-    *   **Solution:** Run `geoupdate` again. This is usually a temporary network issue.
+If your issue is not listed there, please feel free to **[open an issue](https://github.com/aymonix/ufwcheck/issues)**.
 
 ## FAQ
 
 **Q: What happens if I run `install.sh` again?**
-**A:** Be careful. The `install.sh` script is designed for a "clean" installation and **will overwrite** existing scripts and configuration files with each run. **This will erase your custom edits to the configs.** To update to a new version, it is recommended to **first completely uninstall** the old version (see `## Uninstall`) and then run the new `install.sh`.
+**A:** The installer is designed for the initial setup. Running `install.sh` again **will overwrite** your existing scripts and configuration files (`~/.config/ufwcheck/config.sh`) with the default versions. Be careful, as **this will erase any custom changes** you have made to the configuration.
 
 **Q: Why do I need a MaxMind account to download GeoLite2?**
 **A:** MaxMind requires registration to download their free GeoLite2 databases to comply with privacy regulations (like CCPA and GDPR) and to notify users of important updates.
@@ -232,7 +185,7 @@ We welcome any contributions to the `ufwcheck` project! If you have ideas for im
 
 ## Uninstall
 
-To completely remove `ufwcheck` from your system, please refer to the **[Uninstall Guide](docs/UNINSTALL.md)**.
+To completely remove `ufwcheck` from your system, please refer to the **[Uninstall Guide](docs/uninstall.md)**.
 
 ## Security Notice
 

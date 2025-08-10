@@ -1,0 +1,55 @@
+# Troubleshooting
+
+#### General Issues
+*   **Error:** `bash: ufwcheck: command not found`
+    *   **Cause:** Your shell has not yet loaded the new environment settings.
+    *   **Solution:** Ensure you have added the `source "$HOME/.config/ufwcheck/env.sh"` line to your `~/.bashrc` (or `~/.zshrc`) and then **restarted your terminal** or run `source ~/.bashrc`.
+
+#### `ufwcheck` Errors
+
+*   **Error:** `[✘] Error: Required command not found: 'jq'. Please install it.`
+    *   **Cause:** A required utility (e.g., `jq`) is missing from the system.
+    *   **Solution:** Install the missing package. For Debian/Ubuntu, the package list is in the `## Prerequisites` section.
+
+*   **Error:** `[✘] Error: Configuration file not found at '~/.config/ufwcheck/config.sh'`
+    *   **Cause:** The main configuration file is missing or in the wrong location.
+    *   **Solution:** Ensure the installation was successful. If you performed a manual installation, create this file at the specified path.
+
+*   **Error:** `[✘] Error: UFW log file not found or not readable...`
+    *   **Cause:** The path to the UFW log is incorrect, or your user lacks permission to read it.
+    *   **Solution:** Check the `LOG_FILE` path in your config. The system log `/var/log/ufw.log` often requires administrator privileges (`root`) or membership in the `adm` group. Ensure your user is i>
+
+*   **Error:** `[✘] Error: GeoIP database not found or not readable...`
+    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet. The `install.sh` script only prepares for the download.
+    *   **Solution:** You need to run `geoupdate` for the first time to download the database. If you installed manually, ensure you have downloaded the database and placed it at the path specified in `>
+
+*   **Error:** `[✘] Error: The value for '...' must be a positive integer...`
+    *   **Cause:** You provided a non-numeric or negative value to an option (`--top`, `--days`, `--attempts`).
+    *   **Solution:** Use only positive integers (e.g., `1`, `10`, `100`).
+
+*   **Error:** `[✘] Error: Invalid month abbreviation...` or `...Date must be in YYYY-MM-DD format...`
+    *   **Cause:** The date or month format is incorrect.
+    *   **Solution:** Use three-letter English abbreviations (`Jan`, `Feb`, etc.) for the month or the `YYYY-MM-DD` format for the date.
+
+#### `geoupdate` Errors
+
+*   **Error:** `ERROR: Cannot read config file: '~/.config/maxmind/config.sh'`
+    *   **Cause:** The MaxMind configuration loader is missing.
+    *   **Solution:** Ensure the installation was successful and the file exists.
+
+*   **Error:** `source: ~/.config/maxmind/secrets: No such file or directory`
+    *   **Cause:** You chose the manual setup option and did not create the credentials file.
+    *   **Solution:** Create the `~/.config/maxmind/secrets` file and place your **MaxMind Account ID** and **License Key** in it, as shown during the installation.
+
+*   **Error:** `ERROR: MAXMIND_ID or MAXMIND_TOKEN is not exported...`
+    *   **Cause:** The `secrets` file exists, but the variables are defined incorrectly.
+    *   **Solution:** Check `~/.config/maxmind/secrets`. Make sure the lines begin with `export`.
+
+*   **Error:** `curl: (22) The requested URL returned error: 401 Unauthorized`
+    *   **Cause:** Your **Account ID** or **License Key** is incorrect.
+    *   **Solution:** Verify the credentials in your `~/.config/maxmind/secrets` file.
+
+*   **Error:** `ERROR: SHA256 mismatch!`
+    *   **Cause:** The downloaded archive is corrupt.
+    *   **Solution:** Run `geoupdate` again. This is usually a temporary network issue.
+
