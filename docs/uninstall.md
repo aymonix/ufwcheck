@@ -2,7 +2,7 @@
 
 This guide provides the steps to completely and cleanly remove all components of `ufwcheck` from your system.
 
-### Step 1: Remove the Cron Job (If Configured)
+## Step 1: Remove the Cron Job (If Configured)
 
 If you set up an automatic update job, you need to remove it from your user's crontab.
 
@@ -12,7 +12,7 @@ If you set up an automatic update job, you need to remove it from your user's cr
     ```
 2.  Find the line containing `geoupdate.sh` and delete it. Save and exit the editor.
 
-### Step 2: Clean Up Your Shell Configuration
+## Step 2: Clean Up Your Shell Configuration
 
 You need to remove the line that sources the environment settings.
 
@@ -23,7 +23,7 @@ You need to remove the line that sources the environment settings.
     ```
 3.  Save the file. The changes will take effect when you start a new terminal session.
 
-### Step 3: Remove All Files and Directories
+## Step 3: Remove All Files and Directories
 
 The following command will permanently delete all scripts, configuration files, and data associated with the tool suite.
 

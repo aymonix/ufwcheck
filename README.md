@@ -40,9 +40,9 @@ We provide an automated installer script to make setup as quick and easy as poss
     ./install.sh
     ```
 
-> For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/installation.md)**.
+For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/installation.md)**.
 
-> *Note: `install.sh` is intended for initial installation. Please read the FAQ for details on re-running the script.*
+*Note: `install.sh` is intended for initial installation. Please read the FAQ for details on re-running the script.*
 
 ## Usage
 
@@ -74,6 +74,7 @@ The primary analysis tool is `ufwcheck.sh` (available via the `ufwcheck` alias a
     This mode outputs the results in a machine-readable JSON format, ideal for integrating with other scripts, monitoring systems, or web frontends. The output is directed to standard output (`stdout`), allowing you to easily redirect it:
     *   **To a file:** `ufwcheck --json > report.json`
     *   **To another program:** `ufwcheck --json | jq '.[] | .ip'`
+    This command extracts just the IP addresses from the JSON report, providing a clean list for use in other scripts or for piping into tools like `whois`.
 
 #### Examples
 
@@ -130,7 +131,7 @@ You can easily set up automatic reports. Open your crontab for editing (`crontab
     ```
 
 #### Convenient Aliases
-Create an alias in your `~/.bash_aliases` (or `~/.bashrc`) for frequently used command sets:
+You can add your own convenient aliases to the environment file created by the installer. Open `~/.config/ufwcheck/env.sh` and add your custom aliases, for example:
 
 *   **Example "ufwclean" alias:**
     *Shows only external IPs with 5 or more blocked attempts.*
@@ -150,7 +151,7 @@ The installer offers to set up a weekly `cron` job to run this command automatic
 
 If you encounter any issues during installation or usage, we have prepared a comprehensive troubleshooting guide.
 
-➡️ Click here to view the **[Troubleshooting Guide](docs/troubleshooting.md)**
+Click here to view the **[Troubleshooting Guide](docs/troubleshooting.md)**
 
 If your issue is not listed there, please feel free to **[open an issue](https://github.com/aymonix/ufwcheck/issues)**.
 
@@ -177,11 +178,11 @@ We welcome any contributions to the `ufwcheck` project! If you have ideas for im
 
 ## Changelog
 
-*   **v1.0.0** (2025-08-06)
-    *   🎉 Initial public release of `ufwcheck`.
-    *   ⚙️ Added the smart installer `install.sh`.
-    *   ✨ Implemented `ufwcheck` with flexible filters and JSON output.
-    *   🔄 Added `geoupdate` for automatic GeoIP database updates.
+**v1.0.0** (2025-08-06)
+*   🎉 Initial public release of `ufwcheck`.
+*   ⚙️ Added the smart installer `install.sh`.
+*   ✨ Implemented `ufwcheck` with flexible filters and JSON output.
+*   🔄 Added `geoupdate` for automatic GeoIP database updates.
 
 ## Uninstall
 
@@ -199,7 +200,7 @@ This tool is intended for **defensive security monitoring only**. Always:
 
 **Aymon**
 
-*   GitHub: [@aymonix](https://github.com/aymonix)
+GitHub: [@aymonix](https://github.com/aymonix)
 
 ## License
 

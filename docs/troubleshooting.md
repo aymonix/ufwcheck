@@ -1,11 +1,11 @@
 # Troubleshooting
 
-#### General Issues
+## General Issues
 *   **Error:** `bash: ufwcheck: command not found`
     *   **Cause:** Your shell has not yet loaded the new environment settings.
     *   **Solution:** Ensure you have added the `source "$HOME/.config/ufwcheck/env.sh"` line to your `~/.bashrc` (or `~/.zshrc`) and then **restarted your terminal** or run `source ~/.bashrc`.
 
-#### `ufwcheck` Errors
+## ufwcheck Errors
 
 *   **Error:** `[✘] Error: Required command not found: 'jq'. Please install it.`
     *   **Cause:** A required utility (e.g., `jq`) is missing from the system.
@@ -31,7 +31,7 @@
     *   **Cause:** The date or month format is incorrect.
     *   **Solution:** Use three-letter English abbreviations (`Jan`, `Feb`, etc.) for the month or the `YYYY-MM-DD` format for the date.
 
-#### `geoupdate` Errors
+## geoupdate Errors
 
 *   **Error:** `ERROR: Cannot read config file: '~/.config/maxmind/config.sh'`
     *   **Cause:** The MaxMind configuration loader is missing.

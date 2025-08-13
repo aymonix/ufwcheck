@@ -2,7 +2,7 @@
 
 This guide is for advanced users who prefer to install the tool suite manually without using the `install.sh` script.
 
-### Step 1: Fulfill Prerequisites
+## Step 1: Fulfill Prerequisites
 
 Before you begin, you need to ensure your system is ready.
 
@@ -26,22 +26,21 @@ sudo apt-get update && sudo apt-get install curl util-linux jq cron mmdb-bin
 
 You can place this `.mmdb` file anywhere you like, but you **must** specify the correct path in the configuration file later.
 
-> **Pro Tip:** We strongly recommend placing it in `~/.local/share/geoip/`. This path follows the XDG standard, does not require `sudo` permissions, and helps keep your home directory clean. The default configuration file is already set up to use this path.
+**Pro Tip:** We strongly recommend placing it in `~/.local/share/geoip/`. This path follows the XDG standard, does not require `sudo` permissions, and helps keep your home directory clean. The default configuration file is already set up to use this path.
 
-### Step 2: Create Directories
+## Step 2: Create Directories
 
 Create the required XDG-compliant directories with a single command:
 ```bash
 mkdir -p ~/.local/bin ~/.local/share/geoip ~/.local/state ~/.config/ufwcheck ~/.config/maxmind
 ```
 
-### Step 3: Install the Scripts
+## Step 3: Install the Scripts
 
 Download the latest versions of the scripts from the repository and place them in your local bin directory.
 
 1.  Download the scripts:
     ```bash
-    # Replace URLs with the correct raw file links from the repository
     curl -Lfs https://raw.githubusercontent.com/aymonix/ufwcheck/main/ufwcheck.sh -o ~/.local/bin/ufwcheck
     curl -Lfs https://raw.githubusercontent.com/aymonix/ufwcheck/main/geoupdate.sh -o ~/.local/bin/geoupdate
     ```
@@ -50,7 +49,7 @@ Download the latest versions of the scripts from the repository and place them i
     chmod +x ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh
     ```
 
-### Step 4: Create Configuration Files
+## Step 4: Create Configuration Files
 
 You need to create three configuration files.
 
@@ -85,7 +84,7 @@ STATE_DIR="$HOME/.local/state"
 OUTPUT_LOG="$STATE_DIR/ufwcheck.log"
 ```
 
-### Step 5: Set Up Shell Environment
+## Step 5: Set Up Shell Environment
 
 Create the environment file `~/.config/ufwcheck/env.sh` to enable aliases and PATH access.
 ```bash
@@ -96,7 +95,7 @@ alias ufwcheck='ufwcheck.sh'
 alias geoupdate='geoupdate.sh'
 ```
 
-### Step 6: Final Steps
+## Step 6: Final Steps
 
 1.  **Activate the Environment:** Add the following line to your `~/.bashrc` or `~/.zshrc`:
     ```bash
