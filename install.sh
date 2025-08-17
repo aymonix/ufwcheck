@@ -140,6 +140,7 @@ configure_maxmind() {
 
   local choice
   read -p "How would you like to configure access? [1] Interactive (Recommended) [2] Manual: " choice
+  choice=${choice:-1}
 
   case "$choice" in
     1)
