@@ -76,8 +76,7 @@ run_update() {
   curl -s -f -u "$MAXMIND_ID:$MAXMIND_TOKEN" -L "$SHA_URL" -o "$tmp_sha256"
 
   echo "Verifying checksum..."
-  # sha256sum -c requires the checksum file to be in the same directory
-  # and named correctly, so we move it.
+  # sha256sum -c requires running from the archive's directory
   (cd "$tmp_dir" && sha256sum -c --status "$tmp_sha256")
 
   if [[ $? -ne 0 ]]; then
