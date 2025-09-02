@@ -76,16 +76,12 @@ run_update() {
   curl -s -f -u "$MAXMIND_ID:$MAXMIND_TOKEN" -L "$SHA_URL" -o "$tmp_sha256"
 
   echo "Verifying checksum..."
-  local expected_sum
-  expected_sum=$(awk '{print $1}' "$tmp_sha256")
+  # sha256sum -c requires the checksum file to be in the same directory
+  # and named correctly, so we move it.
+  (cd "$tmp_dir" && sha256sum -c --status "$tmp_sha256")
 
-  local actual_sum
-  actual_sum=$(sha256sum "$tmp_archive" | awk '{print $1}')
-
-  if [[ "$expected_sum" != "$actual_sum" ]]; then
-    echo "ERROR: SHA256 mismatch!" >&2
-    echo "Expected: $expected_sum" >&2
-    echo "Actual:   $actual_sum" >&2
+  if [[ $? -ne 0 ]]; then
+    echo "ERROR: SHA256 mismatch! The downloaded file may be corrupt." >&2
     exit 1
   fi
   echo "Checksum OK."
