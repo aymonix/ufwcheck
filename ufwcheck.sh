@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: ufwcheck.sh
 # AUTHOR: Aymon
-# DATE:   2025-08-06
-# VERSION: 1.0.0
+# DATE:   2025-09-26
+# VERSION: 1.1.0
 #
 # DESCRIPTION
 #   Analyzes UFW (Uncomplicated Firewall) logs to identify and report on IP
@@ -12,7 +12,7 @@
 #   or in JSON format. Geo-location data (country, city) is added for each IP.
 #
 # DEPENDENCIES
-#   - Standard UNIX utils: grep, awk, sort, uniq, head, column
+#   - Standard UNIX utils: grep, awk, sort, head, column
 #   - mmdblookup (from mmdb-bin): For querying the GeoLite2-City database.
 #   - jq: For generating JSON output.
 #
@@ -32,19 +32,23 @@ readonly declare -A MONTH_MAP=(
   [Jan]=01 [Feb]=02 [Mar]=03 [Apr]=04 [May]=05 [Jun]=06
   [Jul]=07 [Aug]=08 [Sep]=09 [Oct]=10 [Nov]=11 [Dec]=12
 )
+readonly PRIVATE_IP_REGEX="^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^127\."
+
+# Fixed path to the configuration file sourced on startup.
+readonly UFWCHECK_CONFIG_FILE="${HOME}/.config/ufwcheck/config.sh"
 
 
 # ==============================================================================
 # FUNCTIONS
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
 #   Prints the help message and usage examples, then exits.
 #
-# ARGUMENTS
-#   None
-# ------------------------------------------------------------------------------
+# OUTPUTS
+#   Writes the full help text to STDOUT.
+# ==============================================================================
 print_help() {
   cat << EOF
 Usage: ufwcheck.sh [OPTIONS]
@@ -80,33 +84,33 @@ EOF
   exit 0
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
 #   Validates if the provided argument is a positive integer.
 #
 # ARGUMENTS
 #   $1 - The value to check (string).
 #   $2 - The name of the flag for the error message (string).
-# ------------------------------------------------------------------------------
+#
+# RETURNS
+#   Exits with code 2 if validation fails.
+# ==============================================================================
 validate_positive_integer() {
   local value="$1"
   local flag_name="$2"
   if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
     echo "[✘] Error: The value for '$flag_name' must be a positive integer. Got: '$value'" >&2
-    exit 1
+    exit 2
   fi
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
 #   Checks if all required command-line tools are installed.
-#
-# ARGUMENTS
-#   None
-# ------------------------------------------------------------------------------
+# ==============================================================================
 check_dependencies() {
   local missing_deps=0
-  for cmd in grep awk sort uniq head column mmdblookup jq; do
+  for cmd in grep awk sort head column mmdblookup jq; do
     if ! command -v "$cmd" &>/dev/null; then
       echo "[✘] Error: Required command not found: '$cmd'. Please install it." >&2
       ((missing_deps++))
@@ -117,241 +121,375 @@ check_dependencies() {
   fi
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
-#   Processes a temporary file of IPs and their counts, enriches the data
-#   with Geo-location information, and prints a final JSON array.
+#   Filters log entries from stdin, optionally removes private IPs, counts
+#   their occurrences, and outputs a list of "count ip".
 #
 # ARGUMENTS
-#   $1 - Path to the temporary file containing "count ip" lines.
-#   $2 - Path to the GeoLite2-City .mmdb database file.
-# ------------------------------------------------------------------------------
-generate_json_output() {
-  local tmp_ips_file="$1"
-  local geo_db_file="$2"
+#   $1 - Flag to filter private IPs ("true" or "false").
+#   $2 - Minimum number of attempts for an IP to be included.
+#
+# OUTPUTS
+#   Writes an unsorted list of "count ip" lines to STDOUT.
+# ==============================================================================
+process_logs() {
+  local filter_private="$1"; shift
+  local min_attempts="$1"; shift
 
-  local json_input=""
-  while read -r count ip; do
-    json_input+="${ip}\t${count}\n"
-  done < "$tmp_ips_file"
+  awk -v filter_private="$filter_private" \
+      -v min_attempts="$min_attempts" \
+      -v private_ip_regex="$PRIVATE_IP_REGEX" '
+    /UFW BLOCK/ {
+        for(i=1; i<=NF; i++) {
+            if ($i ~ /^SRC=/) {
+                ip = $i;
+                sub("SRC=", "", ip);
 
-  echo -n "$json_input" | jq -R '
-    [
-      inputs |
-      split("\t") |
-      {
-        ip: .[0],
-        attempts: .[1] | tonumber
-      }
-    ]
-  ' | jq --slurp --arg geo_db_file "$geo_db_file" '
-    .[] | .[] | . as $item |
-    ("mmdblookup --file \"\($geo_db_file)\" --ip \"\(.ip)\"") |
-    (
-        bash -c "eval $(.)" 2>/dev/null |
-        jq -r "
-          (.. | .country.names.en? // \"-\") as \$country |
-          (.. | .city.names.en? // \"-\") as \$city |
-          {country: \$country, city: \$city}
-        "
-    ) as $geo |
-    $item + {
-      country: (if $geo.country == "-" then null else $geo.country end),
-      city: (if $geo.city == "-" then null else $geo.city end)
+                if (filter_private == "true" && ip ~ private_ip_regex) {
+                    next;
+                }
+
+                counts[ip]++;
+                break;
+            }
+          }
     }
-  ' | jq -s 'sort_by(-.attempts)'
+    END {
+        for (ip in counts) {
+            if (counts[ip] >= min_attempts) {
+                print counts[ip], ip;
+            }
+        }
+    }
+  '
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
-#   Main function to orchestrate the entire script execution.
+#   Checks all system dependencies and configuration files. Exits if any
+#   checks fail.
 #
-# ARGUMENTS
-#   All script arguments are passed here.
-# ------------------------------------------------------------------------------
-main() {
-  # Initial Setup & Pre-flight Checks
+# GLOBAL VARIABLES
+#   UFWCHECK_CONFIG_FILE, LOG_FILE, MMDB_FILE, STATE_DIR
+# ==============================================================================
+check_environment() {
   check_dependencies
 
-  local CONFIG_FILE="$HOME/.config/ufwcheck/config.sh"
-  if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
-  else
-    echo "[✘] Error: Configuration file not found at '$CONFIG_FILE'." >&2
+  if [[ ! -f "$UFWCHECK_CONFIG_FILE" || ! -r "$UFWCHECK_CONFIG_FILE" ]]; then
+    echo "[✘] Error: Configuration file not found or not readable at '$UFWCHECK_CONFIG_FILE'." >&2
     echo "    Please create it based on the example in the README file." >&2
     exit 1
   fi
+
+  # shellcheck source=/dev/null
+  source "$UFWCHECK_CONFIG_FILE"
 
   if [[ ! -r "$LOG_FILE" ]]; then
       echo "[✘] Error: UFW log file not found or not readable at '$LOG_FILE'." >&2
       exit 1
   fi
-
   if [[ ! -r "$MMDB_FILE" ]]; then
       echo "[✘] Error: GeoIP database not found or not readable at '$MMDB_FILE'." >&2
       exit 1
   fi
+  
+  mkdir -p "$STATE_DIR"
+}
 
-  # Argument Parsing
+# ==============================================================================
+# DESCRIPTION
+#   Parses command-line arguments and sets option variables in the caller's scope.
+#   Exits with an error code on any parsing failure.
+#
+# ARGUMENTS
+#   $@ - The full list of command-line arguments.
+# ==============================================================================
+parse_arguments() {
+  require_argument() {
+    local option="$1"
+    local argument="$2"
+    if [[ -z "$argument" ]]; then
+      echo "[✘] Error: Option '$option' requires an argument." >&2
+      exit 2
+    fi
+  }
+
+  while [[ $# -gt 0 ]]; do
+    local current_option="$1"
+    case "$current_option" in
+      --today)
+        mode="today"; shift
+        ;;
+      --date)
+        require_argument "$current_option" "${2-}"
+        mode="date"; value="$2"; shift 2
+        ;;
+      --days|-d)
+        require_argument "$current_option" "${2-}"
+        mode="days"; value="$2"; shift 2
+        ;;
+      --month|-m)
+        require_argument "$current_option" "${2-}"
+        mode="month"; value="$2"; shift 2
+        ;;
+      --top|-t)
+        require_argument "$current_option" "${2-}"
+        top_limit="$2"; shift 2
+        ;;
+      --attempts|-a)
+        require_argument "$current_option" "${2-}"
+        min_attempts="$2"; shift 2
+        ;;
+      --json)
+        json_mode="true"; shift
+        ;;
+      --no-private)
+        filter_private="true"; shift
+        ;;
+      --help|-h)
+        print_help
+        ;;
+      *)
+        echo "[✘] Error: Unknown option '$current_option'. Use --help for usage." >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Takes raw IP data, enriches it with GeoIP information using a batch
+#   database lookup, and outputs a universal, tab-separated stream of
+#   enriched data.
+#
+# ARGUMENTS
+#   $1 - The path to the temporary file containing raw "count ip" data.
+#
+# GLOBAL VARIABLES
+#   MMDB_FILE
+#
+# OUTPUTS
+#   Writes a tab-separated stream of "ip\tcount\tcountry\tcity" to STDOUT.
+# ==============================================================================
+geo_data() {
+  local tmp_ips="$1"
+  local mmdb_stream
+
+  # Step 1: Get the raw data stream from mmdblookup in a single batch call.
+  mmdb_stream=$(awk '{print $2}' "$tmp_ips" | mmdblookup --file "$MMDB_FILE" --ip - 2>/dev/null)
+
+  # Step 2: Join original "count ip" data with the parsed mmdb_stream.
+  paste "$tmp_ips" <(
+    echo "$mmdb_stream" | awk '
+      BEGIN { RS = "" }
+      {
+        country = "-"
+        city = "-"
+        in_country_names = 0
+        in_city_names = 0
+
+        for (i = 1; i <= NF; i++) {
+          if ($i == "\"country\":") { in_country_names = 1 }
+          if ($i == "\"city\":") { in_city_names = 1 }
+
+          if (in_country_names && $i == "\"en\":") {
+            value = ""
+            for (j = i + 1; j <= NF; j++) {
+              if ($(j) ~ /</) { break }
+              value = value (value == "" ? "" : " ") $(j)
+            }
+            country = value
+            in_country_names = 0
+          }
+          if (in_city_names && $i == "\"en\":") {
+            value = ""
+            for (j = i + 1; j <= NF; j++) {
+              if ($(j) ~ /</) { break }
+              value = value (value == "" ? "" : " ") $(j)
+            }
+            city = value
+            in_city_names = 0
+          }
+        }
+        gsub(/^"|"/, "", country)
+        gsub(/^"|"/, "", city)
+        print country "\t" city
+      }
+    '
+  ) | awk '{printf "%s\t%s\t%s\t%s\n", $2, $1, $3, $4}'
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Takes enriched data and formats it as a JSON object.
+#
+# ARGUMENTS
+#   $1 - The path to the temporary file containing raw IP data.
+# ==============================================================================
+format_json() {
+  local tmp_ips="$1"
+  
+  geo_data "$tmp_ips" | jq -R -s '
+    split("\n") | .[0:-1] | map(
+      split("\t") | {
+        ip: .[0],
+        attempts: .[1] | tonumber,
+        country: .[2],
+        city: (if .[3] == "-" then null else .[3] end)
+      }
+    ) | sort_by(-.attempts)
+  '
+  echo "JSON output generated successfully." >&2
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Takes enriched data and formats it as a table.
+#
+# ARGUMENTS
+#   $1 - The path to the temporary file containing raw IP data.
+#   $2 - The path to the temporary file for building the table output.
+#
+# GLOBAL VARIABLES
+#   CMD_ARGS, OUTPUT_LOG
+# ==============================================================================
+format_table() {
+  local tmp_ips="$1"
+  local tmp_out="$2"
+  local date_label
+
+  geo_data "$tmp_ips" > "$tmp_out"
+
+  date_label="[$(LC_TIME=C date '+%Y-%m-%d %H:%M')]"
+  echo
+  echo "$date_label"
+  printf "\n[COMMAND] %s\n" "$CMD_ARGS" >> "$OUTPUT_LOG"
+  echo "$date_label" >> "$OUTPUT_LOG"
+
+  if [[ -s "$tmp_out" ]]; then
+      (
+        printf "IP Address\tAttempts\tCountry\tCity\n"
+        printf -- "--------------\t----------\t--------------\t----------\n"
+        cat "$tmp_out"
+      ) | column -t -s $'\t' -o "  " | tee -a "$OUTPUT_LOG"
+  else
+      echo "No IPs found matching the specified criteria." | tee -a "$OUTPUT_LOG"
+  fi
+
+  echo "-------------------------------------------------------" | tee -a "$OUTPUT_LOG"
+  echo
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Extracts and processes log data into a temporary file.
+#
+# ARGUMENTS
+#   $1 - The path to the temporary file where processed IP data will be stored.
+#
+# GLOBAL VARIABLES
+#   LOG_FILE, MONTH_MAP
+# ==============================================================================
+extract_data() {
+  local tmp_ips="$1"
+  local date_regex
+  local final_regex
+  local dates
+  local month_num
+  local limit_pipe=("cat")
+  
+  case "$mode" in
+    today) date_regex="^$(LC_TIME=C date '+%Y-%m-%d')T";;
+    date)
+      if ! [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo "[✘] Error: Date must be in YYYY-MM-DD format. Got: '$value'" >&2
+        exit 2
+      fi
+      date_regex="^${value}T";;
+    days)
+      dates=()
+      for ((i=0; i<value; i++)); do dates+=("$(LC_TIME=C date -d "-$i day" '+%Y-%m-%d')"); done
+      date_regex=$(printf '^%sT|' "${dates[@]}"); date_regex=${date_regex%|};;
+    month)
+      month_num="${MONTH_MAP[$value]}"
+      if [[ -z "$month_num" ]]; then
+        echo "[✘] Error: Invalid month abbreviation '$value'. Use Jan, Feb, etc." >&2
+        exit 2
+      fi
+      date_regex="^....-${month_num}-[0-9][0-9]T";;
+  esac
+
+  if [[ -n "$top_limit" ]]; then
+    limit_pipe=("head" "-n" "$top_limit")
+  fi
+
+  final_regex="${date_regex}.*UFW BLOCK"
+  grep -E "$final_regex" "$LOG_FILE" | \
+  process_logs "$filter_private" "$min_attempts" | \
+  sort -nr | \
+  "${limit_pipe[@]}" > "$tmp_ips"
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Orchestrates the report generation process by calling data extraction and
+#   formatting functions.
+#
+# ARGUMENTS
+#   $1 - The path to the temporary file for storing processed IP data.
+#   $2 - The path to the temporary file for building the table output.
+# ==============================================================================
+generate_report() {
+  local tmp_ips="$1"
+  local tmp_out="$2"
+
+  extract_data "$tmp_ips"
+
+  if [[ "$json_mode" == "true" ]]; then
+    format_json "$tmp_ips"
+  else
+    format_table "$tmp_ips" "$tmp_out"
+  fi
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Main function to orchestrate the entire script execution.
+#
+# ARGUMENTS
+#   $@ - All script arguments are passed here.
+# ==============================================================================
+main() {
   local mode="today"
   local value=""
   local top_limit=""
   local min_attempts=2
   local json_mode="false"
   local filter_private="false"
+  local tmp_ips
+  local tmp_out
 
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --today)
-        mode="today"
-        shift
-        ;;
-      --date)
-        mode="date"
-        value="$2"
-        shift 2
-        ;;
-      --days|-d)
-        mode="days"
-        value="$2"
-        shift 2
-        ;;
-      --month|-m)
-        mode="month"
-        value="$2"
-        shift 2
-        ;;
-      --top|-t)
-        top_limit="$2"
-        shift 2
-        ;;
-      --attempts|-a)
-        min_attempts="$2"
-        shift 2
-        ;;
-      --json)
-        json_mode="true"
-        shift
-        ;;
-      --no-private)
-        filter_private="true"
-        shift
-        ;;
-      --help|-h)
-        print_help
-        ;;
-      *)
-        echo "[✘] Error: Unknown option '$1'. Use --help for usage." >&2
-        exit 1
-        ;;
-    esac
-  done
+  check_environment
 
-  # Validate numerical arguments
+  tmp_ips=$(mktemp "$STATE_DIR/ufw_ips.XXXXXX")
+  tmp_out=$(mktemp "$STATE_DIR/ufw_out.XXXXXX")
+  trap 'rm -f "$tmp_ips" "$tmp_out"' EXIT
+
+  parse_arguments "$@"
+
   if [[ "$mode" == "days" ]]; then
     validate_positive_integer "$value" "--days"
   fi
+
   if [[ -n "$top_limit" ]]; then
     validate_positive_integer "$top_limit" "--top"
   fi
+
   validate_positive_integer "$min_attempts" "--attempts"
 
-  # Data Extraction
-  mkdir -p "$STATE_DIR"
-  local tmp_ips
-  tmp_ips=$(mktemp "$STATE_DIR/ufw_ips.XXXXXX")
-  trap 'rm -f "$tmp_ips"' EXIT
-
-  local regex=""
-  case "$mode" in
-    today) regex="^$(date '+%Y-%m-%d')T";;
-    date)
-      if ! [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-        echo "[✘] Error: Date must be in YYYY-MM-DD format. Got: '$value'" >&2
-        exit 1
-      fi
-      regex="^${value}T";;
-    days)
-      local dates=()
-      for ((i=0; i<value; i++)); do dates+=("$(date -d "-$i day" '+%Y-%m-%d')"); done
-      regex=$(printf '^%sT|' "${dates[@]}"); regex=${regex%|};;
-    month)
-      local month_num="${MONTH_MAP[$value]}"
-      if [[ -z "$month_num" ]]; then
-        echo "[✘] Error: Invalid month abbreviation '$value'. Use Jan, Feb, etc." >&2
-        exit 1
-      fi
-      regex="^....-${month_num}-[0-9][0-9]T";;
-  esac
-
-  local log_pipeline="grep -E \"$regex.*UFW BLOCK\" \"$LOG_FILE\""
-
-  if [[ "$filter_private" == "true" ]]; then
-    local private_ip_regex='SRC=(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)'
-    log_pipeline+=" | grep -vE \"$private_ip_regex\""
-  fi
-
-  eval "$log_pipeline" |
-    awk '{for(i=1;i<=NF;i++) if ($i ~ /^SRC=/) {sub("SRC=", "", $i); print $i}}' |
-    sort | uniq -c |
-    awk -v min_attempts="$min_attempts" '$1 >= min_attempts {print $1, $2}' |
-    sort -nr > "$TMP_IPS.sorted"
-
-  if [[ -n "$top_limit" ]]; then
-    head -n "$top_limit" "$TMP_IPS.sorted" > "$tmp_ips"
-    rm -f "$TMP_IPS.sorted"
-  else
-    mv "$TMP_IPS.sorted" "$tmp_ips"
-  fi
-
-  # Output Generation
-  if [[ "$json_mode" == "true" ]]; then
-    # JSON Mode
-    generate_json_output "$tmp_ips" "$MMDB_FILE"
-    echo "JSON output generated successfully." >&2
-  else
-    # Table Mode
-    local tmp_out
-    tmp_out=$(mktemp "$STATE_DIR/ufw_out.XXXXXX")
-    trap 'rm -f "$tmp_ips" "$tmp_out"' EXIT
-
-    while read -r count ip; do
-      local geo_output
-      geo_output=$(mmdblookup --file "$MMDB_FILE" --ip "$ip" 2>/dev/null || true)
-
-      local country city
-      IFS='|' read -r country city <<< "$(echo "$geo_output" | awk -F'"' '
-        /"country"/ {in_country=1}; in_country && /"en"/ {getline; c=$2; in_country=0}
-        /"city"/ {in_city=1}; in_city && /"en"/ {getline; ci=$2; in_city=0}
-        END {print c "|" ci}
-      ')"
-
-      [[ -z "$country" ]] && country="-"
-      [[ -z "$city" ]] && city="-"
-
-      echo -e "${ip}\t${count}\t${country}\t${city}" >> "$tmp_out"
-    done < "$tmp_ips"
-
-    local date_label="[$(date '+%Y-%m-%d %H:%M')]"
-    echo
-    echo "$date_label"
-    echo -e "\n[COMMAND] $CMD_ARGS" >> "$OUTPUT_LOG"
-    echo "$date_label" >> "$OUTPUT_LOG"
-
-    if [[ -s "$tmp_out" ]]; then
-        (
-          echo -e "IP Address\tAttempts\tCountry\tCity"
-          echo -e "--------------\t----------\t--------------\t----------"
-          cat "$tmp_out"
-        ) | column -t -s $'\t' -o "  " | tee -a "$OUTPUT_LOG"
-    else
-        echo "No IPs found matching the specified criteria." | tee -a "$OUTPUT_LOG"
-    fi
-
-    echo "-------------------------------------------------------" | tee -a "$OUTPUT_LOG"
-    echo
-  fi
+  generate_report "$tmp_ips" "$tmp_out"
 }
 
 
