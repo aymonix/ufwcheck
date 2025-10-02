@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: geoupdate.sh
 # AUTHOR: Aymon
-# DATE:   2025-08-06
-# VERSION: 1.0.0
+# DATE:   2025-09-26
+# VERSION: 1.1.0
 #
 # DESCRIPTION
 #   Downloads and verifies the latest GeoLite2-City.mmdb database from MaxMind.
@@ -24,44 +24,37 @@ set -euo pipefail
 # ==============================================================================
 # GLOBAL VARIABLES & CONSTANTS
 # ==============================================================================
-readonly STATE_DIR="$HOME/.local/state"
-readonly LOG_FILE="$STATE_DIR/geoupdate.log"
+readonly UFWCHECK_CONFIG_FILE="$HOME/.config/ufwcheck/config.sh"
+readonly MAXMIND_CONFIG_FILE="$HOME/.config/maxmind/config.sh"
 
 
 # ==============================================================================
 # FUNCTIONS
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
-#   Encapsulates the entire update logic to ensure all output is captured by
-#   the logging mechanism.
+#   Encapsulates the core update logic: download, verification, and unpacking.
 #
-# ARGUMENTS
-#   None
-# ------------------------------------------------------------------------------
+# GLOBAL VARIABLES
+#   MAXMIND_ID, MAXMIND_TOKEN, MMDB_FILE, STATE_DIR, DOWNLOAD_URL, SHA_URL
+# ==============================================================================
 run_update() {
-  # Load credentials via the central config loader.
-  local CONFIG_FILE="$HOME/.config/maxmind/config.sh"
-  if [[ ! -r "$CONFIG_FILE" ]]; then
-    echo "ERROR: Cannot read config file: $CONFIG_FILE" >&2
+  if [[ -z "${MAXMIND_ID:-}" ]]; then
+    echo "ERROR: MAXMIND_ID is not set or is empty in your secrets file." >&2
     exit 1
   fi
-  # shellcheck source=/dev/null
-  source "$CONFIG_FILE"
-
-  if [[ -z "${MAXMIND_ID:-}" || -z "${MAXMIND_TOKEN:-}" ]]; then
-    echo "ERROR: MAXMIND_ID or MAXMIND_TOKEN is not exported by $CONFIG_FILE" >&2
+  if [[ -z "${MAXMIND_TOKEN:-}" ]]; then
+    echo "ERROR: MAXMIND_TOKEN is not set or is empty in your secrets file." >&2
     exit 1
   fi
 
-  local DEST_DIR="$HOME/.local/share/geoip"
-  local DOWNLOAD_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
-  local SHA_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz.sha256"
+  local geoip_data_dir
+  geoip_data_dir=$(dirname "$MMDB_FILE")
 
-  mkdir -p "$DEST_DIR"
+  mkdir -p "$geoip_data_dir"
 
-  # Create a temporary directory within our state folder for cleanliness.
+  # Create a temporary directory.
   local tmp_dir
   tmp_dir="$(mktemp -d "$STATE_DIR/geoupdate.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
@@ -77,35 +70,63 @@ run_update() {
 
   echo "Verifying checksum..."
   # sha256sum -c requires running from the archive's directory
-  (cd "$tmp_dir" && sha256sum -c --status "$tmp_sha256")
-
-  if [[ $? -ne 0 ]]; then
+  if ! (cd "$tmp_dir" && sha256sum -c --status "$tmp_sha256"); then
     echo "ERROR: SHA256 mismatch! The downloaded file may be corrupt." >&2
     exit 1
   fi
   echo "Checksum OK."
 
-  echo "Unpacking archive to $DEST_DIR..."
-  tar -xzf "$tmp_archive" -C "$DEST_DIR" --strip-components=1
+  echo "Verifying archive content for unsafe file paths..."
+  # Security: Check for unsafe paths (e.g., / or ../) to prevent "Tar Slip".
+  if tar -tf "$tmp_archive" | grep -q -e '^/' -e '\.\./'; then
+    echo "ERROR: Archive contains potentially unsafe file paths. Aborting." >&2
+    exit 1
+  fi
+  echo "Archive content is safe."
+
+  echo "Unpacking archive to $geoip_data_dir..."
+  tar -xzf "$tmp_archive" -C "$geoip_data_dir" --strip-components=1
 
   echo "GeoLite2-City database updated successfully."
 }
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # DESCRIPTION
-#   Main function to set up logging and orchestrate the script execution.
+#   Loads configuration, sets up logging, and orchestrates the script execution.
 #
-# ARGUMENTS
-#   All script arguments are passed here (currently none).
-# ------------------------------------------------------------------------------
+# GLOBAL VARIABLES
+#   UFWCHECK_CONFIG_FILE, MAXMIND_CONFIG_FILE
+# ==============================================================================
 main() {
+  # Load project paths from the ufwcheck config.
+  if [[ ! -r "$UFWCHECK_CONFIG_FILE" ]]; then
+    echo "ERROR: Cannot read ufwcheck config file: $UFWCHECK_CONFIG_FILE" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$UFWCHECK_CONFIG_FILE"
+
+  # Load credentials and URLs from the MaxMind config.
+  if [[ ! -r "$MAXMIND_CONFIG_FILE" ]]; then
+    echo "ERROR: Cannot read MaxMind config file: $MAXMIND_CONFIG_FILE" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$MAXMIND_CONFIG_FILE"
+
+  local GEO_LOG_FILE="${STATE_DIR}/geoupdate.log"
   mkdir -p "$STATE_DIR"
 
-  # Redirect all output of the main logic to the log file and terminal.
   {
     run_update
-  } > >(while read -r line; do echo "[INFO ] $(date '+%Y-%m-%d %H:%M:%S') $line"; done | tee -a "$LOG_FILE") \
-    2> >(while read -r line; do echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') $line"; done | tee -a "$LOG_FILE")
+  } 2>&1 | awk '{
+      if ($0 ~ /^ERROR:/) {
+          print "[ERROR] " strftime("[%Y-%m-%d %H:%M:%S]") " " $0
+      } else {
+          print "[INFO ] " strftime("[%Y-%m-%d %H:%M:%S]") " " $0
+      }
+      fflush()
+  }' | tee -a "$GEO_LOG_FILE"
 }
 
 
