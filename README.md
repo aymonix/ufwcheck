@@ -1,27 +1,33 @@
 # ufwcheck
 
-**ufwcheck** is a suite of `bash` utilities for analyzing UFW (Uncomplicated Firewall) logs. It helps identify IP addresses exhibiting suspicious activity, enriches them with geolocation data, and presents the findings in clear, ranked reports.
+**ufwcheck** is a suite of `bash` utilities for analyzing UFW (Uncomplicated Firewall) logs, designed for Debian and Ubuntu environments. It helps identify IP addresses exhibiting suspicious activity, enriches them with geolocation data, and presents the findings in clear, ranked reports.
 
 ## Features
 
-*   ⚡ **Fast Log Analysis**: Finds and aggregates all `[UFW BLOCK]` events.
+#### Core Functionality
+*   ⚡ **Fast Log Analysis**: Finds and aggregates all `UFW BLOCK` events.
 *   🌍 **IP Geolocation**: Automatically determines the country and city for each IP.
 *   🔍 **Flexible Filtering**: Analyze logs for today, a specific date, the last N days, or a specific month.
-*   📊 **Customizable Reporting**: Allows limiting the output to the top N most active IPs or filtering by the minimum number of blocked attempts.
+*   📋 **Customizable Reporting**: Allows limiting the output to the top N most active IPs or filtering by the minimum number of blocked attempts.
+
+#### Convenience & Usability
 *   🛡️ **Safe & Read-Only**: `ufwcheck` operates in a non-destructive mode, ensuring your system logs are never modified.
-*   ⚙️ **Smart Installer**: `install.sh` automatically checks for dependencies and assists with setup.
-*   🔄 **Automatic Updates**: `geoupdate.sh` makes it easy to keep your GeoIP database up to date.
+*   ⚙️ **Guided Installer**: `install.sh` automatically checks for dependencies and assists with setup.
+*   🔒 **Secure by Design**: The installer verifies script integrity, and the update process is hardened against common threats.
+*   🔄 **Easy Updates**: `geoupdate.sh` makes it easy to keep your GeoIP database up to date.
 
 ## Prerequisites
 
 The `install.sh` script will automatically check for all required utilities. For it to run, you will need:
-*   `curl` (or `wget`)
-*   `mmdblookup` (from the `mmdb-bin` package)
-*   `column` (from the `util-linux` package)
+*   `curl`
+*   `mmdblookup` from the `mmdb-bin` package
+*   `column` from the `util-linux` package
 *   `jq`
-*   `cron` (for optional automatic updates)
+*   `sha256sum` from the `coreutils` package
+*   `cron` for optional automatic updates
 
-You will also need a free **MaxMind** account to download the GeoLite2-City database.
+> [!IMPORTANT]
+> A free **MaxMind** account is required to download the GeoLite2-City database. Registration is needed so MaxMind can notify users of important database updates or changes to their service.
 
 ## Installation
 
@@ -31,39 +37,46 @@ We provide an automated installer script to make setup as quick and easy as poss
     ```bash
     curl -O https://raw.githubusercontent.com/aymonix/ufwcheck/main/install.sh
     ```
-2.  **Make it executable:**
+2.  **Verify Installer Integrity**
+    To ensure the installer is authentic, verify its SHA256 checksum. The command should output `install.sh: OK`.
+    ```bash
+    echo "6313cfe31493d9808a83817d57b3d0ed5a07307d191ea7f8ee9d263ad81f0166  install.sh" | sha256sum -c -
+    ```
+
+3.  **Make it executable:**
     ```bash
     chmod +x install.sh
     ```
-3.  **Run the installer and follow the on-screen instructions:**
+4.  **Run the installer and follow the on-screen instructions:**
     ```bash
     ./install.sh
     ```
 
-For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/installation.md)**.
+> [!NOTE]
+> `install.sh` is intended for initial installation. Please see the **[FAQ](#FAQ)** for important details about re-running the script.
 
-*Note: `install.sh` is intended for initial installation. Please read the FAQ for details on re-running the script.*
+For advanced users who prefer a completely manual installation, we have prepared a **[Manual Installation Guide](docs/installation.md)**.
 
 ## Usage
 
-The primary analysis tool is `ufwcheck.sh` (available via the `ufwcheck` alias after installation).
+The primary analysis tool is `ufwcheck.sh`, which becomes available system-wide via the `ufwcheck` alias after installation. By default, running the command without any options will analyze today's logs for IP addresses with two or more blocked attempts. Each report is prefixed with a timestamp indicating the exact date and time the script was executed.
 
 #### Options
 
 | Option | Argument | Short Description | Default |
 | :--- | :--- | :--- | :--- |
 | **Data Filtering** |
-| `--today` | — | Analyze today's logs. | **Yes** |
+| `--today` | - | Analyze today's logs. | **Yes** |
 | `--date` | `YYYY-MM-DD` | Filter by a specific date. | - |
 | `--days`, `-d` | `N` | Filter logs for the last N days. | - |
-| `--month`, `-m`| `NAME` | Filter by month (e.g., `Jan`). | - |
-| `--no-private` | — | Exclude private/local IPs. | - |
+| `--month`, `-m`| `NAME` | Filter by month (e.g., `Jan`, `Feb`, ... `Dec`). | - |
+| `--no-private` | - | Exclude private/local IPs. | - |
 | **Output Control** |
 | `--top`, `-t` | `N` | Show only the top N IPs. | All |
 | `--attempts`, `-a`| `N` | Filter by min number of attempts. | `2` |
-| `--json` | — | Output in JSON format. | - |
+| `--json` | - | Output in JSON format. | - |
 | **Other Options** |
-| `--help`, `-h` | — | Show this help message. | - |
+| `--help`, `-h` | - | Show help message. | - |
 
 #### Explanations for Select Options
 
@@ -78,39 +91,39 @@ The primary analysis tool is `ufwcheck.sh` (available via the `ufwcheck` alias a
 
 #### Examples
 
-*   **Basic Usage**
-    *Analyze today's logs for IPs with 2 or more blocked attempts (default behavior):*
-    ```bash
-    ufwcheck
-    ```
-    *Show the top 10 most active IPs for today:*
-    ```bash
-    ufwcheck -t 10
-    ```
-    *Show external IPs with more than 50 blocked attempts for today:*
-    ```bash
-    ufwcheck --no-private -a 50
-    ```
-    *Get a report for a specific date in JSON format and save it to a file:*
-    ```bash
-    ufwcheck --date 2025-07-26 --json > report.json
-    ```
+**Basic Usage**
+*Analyze today's logs for IPs with 2 or more blocked attempts (default behavior):*
+```bash
+ufwcheck
+```
+*Show the top 10 most active IPs for today:*
+```bash
+ufwcheck -t 10
+```
+*Show external IPs with more than 50 blocked attempts for today:*
+```bash
+ufwcheck --no-private -a 50
+```
+*Get a report for a specific date in JSON format and save it to a file:*
+```bash
+ufwcheck --date 2025-07-26 --json > report.json
+```
+\
+**Combined Options**
+*Last 7 days, IPs with 5+ blocked attempts, top 20 results:*
+```bash
+ufwcheck -d 7 -a 5 -t 20
+```
+*Get a report for July, top 30, with over 100 blocked attempts, in JSON format, and save to a file:*
+```bash
+ufwcheck -m Jul -t 30 -a 100 --json > report.json
+```	
 
-*   **Combined Options**
-    *Last 7 days, IPs with 5+ blocked attempts, top 20 results:*
-    ```bash
-    ufwcheck -d 7 -a 5 -t 20
-    ```
-    *Get a report for July, top 30, with over 100 blocked attempts, in JSON format, and save to a file:*
-    ```bash
-    ufwcheck -m Jul -t 30 -a 100 --json > report.json
-    ```
-	
 ## Output Format
 
 The script generates a formatted table for easy analysis. The example uses IP addresses reserved for documentation (RFC 5737).
 
-```text
+```bash
 [2025-07-26 12:20]
 IP Address         Attempts  Country          City
 --------------     --------  ---------------  -----------
@@ -123,21 +136,25 @@ IP Address         Attempts  Country          City
 ## Advanced Usage
 
 #### Automated Reports with Cron
-You can easily set up automatic reports. Open your crontab for editing (`crontab -e`) and add one of the following lines:
+You can easily set up automatic reports. Open your crontab for editing with `crontab -e` and add an entry like the following example.
 
-*   **Send a daily report (top 20 IPs) via Email:**
-    ```cron
-    0 8 * * * ufwcheck --no-private -t 20 | mail -s "Daily Ufwcheck Report" your.email@example.com
-    ```
+*Send a daily report of the top 20 external IPs to your email at 8:00 AM:*
+```cron
+0 8 * * * ufwcheck --no-private -t 20 | mail -s "Daily Ufwcheck Report" your.email@example.com
+```
 
 #### Convenient Aliases
-You can add your own convenient aliases to the environment file created by the installer. Open `~/.config/ufwcheck/env.sh` and add your custom aliases, for example:
+You can add your own convenient aliases to the environment file created by the installer. Open `~/.config/ufwcheck/env.sh` and add your custom aliases, for example.
 
-*   **Example "ufwclean" alias:**
-    *Shows only external IPs with 5 or more blocked attempts.*
-    ```bash
-    alias ufwclean='ufwcheck.sh --no-private -a 5'
-    ```
+*Create a custom "ufwclean" alias that shows only external IPs with 5 or more blocked attempts:*
+```bash
+alias ufwclean='ufwcheck.sh --no-private -a 5'
+```
+
+*Create a "ufwtop" alias for a weekly summary of the top 30 IPs with over 100 blocked attempts:*
+```bash
+alias ufwtop='ufwcheck.sh -d 7 -a 100 -t 30'
+```
 
 ## Updating the GeoIP Database
 
@@ -145,7 +162,9 @@ To update the GeoLite2-City database to the latest version, simply run:
 ```bash
 geoupdate
 ```
-The installer offers to set up a weekly `cron` job to run this command automatically, ensuring your database remains current.
+
+> [!TIP]
+> For your convenience, the installer can set up a weekly `cron` job to run the `geoupdate` command automatically. This ensures your geolocation data always stays current.
 
 ## Troubleshooting
 
@@ -158,7 +177,17 @@ If your issue is not listed there, please feel free to **[open an issue](https:/
 ## FAQ
 
 **Q: What happens if I run `install.sh` again?**
-**A:** The installer is designed for the initial setup. Running `install.sh` again **will overwrite** your existing scripts and configuration files (`~/.config/ufwcheck/config.sh`) with the default versions. Be careful, as **this will erase any custom changes** you have made to the configuration.
+**A:**
+> [!CAUTION]
+> Re-running `install.sh` will prompt you to re-enter your MaxMind credentials and **will overwrite** all related configuration files (`~/.config/ufwcheck/config.sh`, `~/.config/ufwcheck/env.sh`, `~/.config/maxmind/*`) with default versions.
+>
+> To prevent data loss, we strongly recommend backing up any custom changes first. You can use these commands:
+> ```bash
+> cp ~/.config/ufwcheck/config.sh ~/.config/ufwcheck/config.sh.bak-$(date +%F)
+> cp ~/.config/ufwcheck/env.sh ~/.config/ufwcheck/env.sh.bak-$(date +%F)
+> cp ~/.config/maxmind/secrets ~/.config/maxmind/secrets.bak-$(date +%F)
+> cp ~/.config/maxmind/config.sh ~/.config/maxmind/config.sh.bak-$(date +%F)
+> ```
 
 **Q: Why do I need a MaxMind account to download GeoLite2?**
 **A:** MaxMind requires registration to download their free GeoLite2 databases to comply with privacy regulations (like CCPA and GDPR) and to notify users of important updates.
@@ -178,8 +207,13 @@ We welcome any contributions to the `ufwcheck` project! If you have ideas for im
 
 ## Changelog
 
+**v1.1.0** (2025-09-26)
+*   🚀 **Performance**: Optimized GeoIP lookups using a batch process.
+*   ✨ **Code**: Refactored the log processing pipeline for clarity.
+*   🔒 **Security**: The installer now verifies downloaded scripts using SHA256 checksums.
+
 **v1.0.0** (2025-08-06)
-*   🎉 Initial public release of `ufwcheck`.
+*   🎉 Initial release of `ufwcheck`.
 *   ⚙️ Added the smart installer `install.sh`.
 *   ✨ Implemented `ufwcheck` with flexible filters and JSON output.
 *   🔄 Added `geoupdate` for automatic GeoIP database updates.
@@ -204,4 +238,4 @@ GitHub: [@aymonix](https://github.com/aymonix)
 
 ## License
 
-This project is distributed under the MIT License. See the `LICENSE` file for details.
+This project is distributed under the MIT License. See the [LICENSE](LICENSE) file for details.

@@ -1,6 +1,17 @@
 # Troubleshooting
 
+## Installation Errors
+
+*   **Error:** `install.sh: FAILED`
+    *   **Cause:** The SHA256 checksum of the downloaded `install.sh` script does not match the official checksum. This means the file is either incomplete or has been altered. This ensures that you do not run a corrupt or altered file.
+    *   **Solution:** Delete the file (`rm install.sh`) and try downloading it again. If the error persists, please let us know by creating an **[Issue](https://github.com/aymonix/ufwcheck/issues)**.
+
+*   **Error:** `ERROR: Checksum mismatch!` (during the execution of `./install.sh`)
+    *   **Cause:** The SHA256 checksum of the downloaded scripts (`ufwcheck.sh` or `geoupdate.sh`) does not match the official checksums. This indicates that the files are incomplete or have been altered during download. This ensures that you do not run a corrupt or altered file.
+    *   **Solution:** Please run `./install.sh` again. If the error persists, please let us know by creating an **[Issue](https://github.com/aymonix/ufwcheck/issues)**.
+
 ## General Issues
+
 *   **Error:** `bash: ufwcheck: command not found`
     *   **Cause:** Your shell has not yet loaded the new environment settings.
     *   **Solution:** Ensure you have added the `source "$HOME/.config/ufwcheck/env.sh"` line to your `~/.bashrc` (or `~/.zshrc`) and then **restarted your terminal** or run `source ~/.bashrc`.
@@ -17,11 +28,13 @@
 
 *   **Error:** `[✘] Error: UFW log file not found or not readable...`
     *   **Cause:** The path to the UFW log is incorrect, or your user lacks permission to read it.
-    *   **Solution:** Check the `LOG_FILE` path in your config. The system log `/var/log/ufw.log` often requires administrator privileges (`root`) or membership in the `adm` group. Ensure your user is i>
+    *   **Solution:** Check the `LOG_FILE` path in your config. The system log `/var/log/ufw.log` often requires administrator privileges (`root`) or membership in the `adm` group. Ensure your user is in the `adm` group (`sudo usermod -aG adm $USER`) or consult your system administrator.
 
 *   **Error:** `[✘] Error: GeoIP database not found or not readable...`
-    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet. The `install.sh` script only prepares for the download.
-    *   **Solution:** You need to run `geoupdate` for the first time to download the database. If you installed manually, ensure you have downloaded the database and placed it at the path specified in `>
+    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet.
+    *   **Solution:**
+        *   **If using automated management:** Run `geoupdate.sh` to download the database.
+        *   **If using manual placement:** Ensure your `.mmdb` file is located at the path specified in the `MMDB_FILE` variable in your configuration.
 
 *   **Error:** `[✘] Error: The value for '...' must be a positive integer...`
     *   **Cause:** You provided a non-numeric or negative value to an option (`--top`, `--days`, `--attempts`).
@@ -52,4 +65,3 @@
 *   **Error:** `ERROR: SHA256 mismatch!`
     *   **Cause:** The downloaded archive is corrupt.
     *   **Solution:** Run `geoupdate` again. This is usually a temporary network issue.
-

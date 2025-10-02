@@ -25,7 +25,7 @@ You need to remove the line that sources the environment settings.
 
 ## Step 3: Remove All Files and Directories
 
-The following command will permanently delete all scripts, configuration files, and data associated with the tool suite.
+The following command will permanently delete all scripts, configuration files, data, and temporary files associated with the tool suite.
 
 ```bash
 rm -rf ~/.local/bin/ufwcheck.sh \
@@ -34,7 +34,9 @@ rm -rf ~/.local/bin/ufwcheck.sh \
        ~/.config/maxmind/ \
        ~/.local/share/geoip/ \
        ~/.local/state/ufwcheck.log \
-       ~/.local/state/geoupdate.log
+       ~/.local/state/geoupdate.log \
+       ~/.local/state/ufw_*.XXXXXX \
+       ~/.local/state/geoupdate.XXXXXX
 ```
 
 After these steps, `ufwcheck` will be completely removed from your system.
