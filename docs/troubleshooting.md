@@ -20,7 +20,7 @@
 
 *   **Error:** `[✘] Error: Required command not found: 'jq'. Please install it.`
     *   **Cause:** A required utility (e.g., `jq`) is missing from the system.
-    *   **Solution:** Install the missing package. For Debian/Ubuntu, the package list is in the `## Prerequisites` section.
+    *   **Solution:** Install the missing package. For Debian/Ubuntu, the package list is in the **[Prerequisites](../README.md#prerequisites)** section.
 
 *   **Error:** `[✘] Error: Configuration file not found at '~/.config/ufwcheck/config.sh'`
     *   **Cause:** The main configuration file is missing or in the wrong location.

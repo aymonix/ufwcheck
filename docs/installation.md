@@ -6,7 +6,7 @@ This guide is for advanced users who prefer to install the tool suite manually w
 
 Before you begin, you need to ensure your system is ready.
 
-#### Required Tools
+### Required Tools
 While most standard utilities (`grep`, `sort`, etc.) are pre-installed, you must ensure the following are present:
 *   `curl` for downloading.
 *   `column` usually in the `util-linux` package.
@@ -20,7 +20,7 @@ On Debian/Ubuntu, you can install all of them with:
 sudo apt-get update && sudo apt-get install curl util-linux jq cron mmdb-bin
 ```
 
-#### Required Data: MaxMind Account & GeoIP Database
+### Required Data: MaxMind Account & GeoIP Database
 
 `ufwcheck` relies on the `GeoLite2-City.mmdb` database for geolocation. For the system to function correctly, this file should be placed at the recommended location: `~/.local/share/geoip/GeoLite2-City.mmdb`. This path follows the XDG standard, does not require `sudo` permissions. The default configuration file is already set up to use this path.
 
@@ -30,11 +30,11 @@ To obtain and manage this database, you will need a free MaxMind account.
 2.  Obtain your Account ID and License Key. These credentials should be configured as described in Step 4.
 
 There are two ways to place the database file in the required location:
-
+&nbsp;
 **Automated Management (Recommended)**
 
 The `geoupdate.sh` script is designed to handle the initial download, and can be scheduled with cron for fully automated subsequent updates. This is the most convenient and reliable method. After configuring your credentials, you will simply run the script as shown in the final step of this guide.
-
+&nbsp;
 **Manual Placement**
 
 If you already have a `GeoLite2-City.mmdb` file and prefer to manage it manually, simply place your `.mmdb` file at the recommended path: `~/.local/share/geoip/`.
@@ -52,14 +52,14 @@ mkdir -p ~/.local/bin ~/.local/share/geoip ~/.local/state ~/.config/ufwcheck ~/.
 ## Step 3: Install the Scripts
 
 Download the latest versions of the scripts from the repository and place them in your local bin directory.
-
+&nbsp;
 **A. Download the scripts and their checksums**:
 ```bash
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/ufwcheck.sh" -o ~/.local/bin/ufwcheck.sh
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/geoupdate.sh" -o ~/.local/bin/geoupdate.sh
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/SHA256SUMS" -o ~/.local/bin/SHA256SUMS
 ```
-\
+&nbsp;
 **B. Verify Integrity (Security Check)**
 This step ensures the downloaded scripts are authentic and have not been altered.
 ```bash
@@ -75,7 +75,8 @@ rm ~/.local/bin/SHA256SUMS
 > rm ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh ~/.local/bin/SHA256SUMS
 > ```
 > If the error persists, please try again later or let us know by creating an **[Issue](https://github.com/aymonix/ufwcheck/issues)**.
-\
+
+&nbsp;
 **C. Make them executable**:
 ```bash
 chmod +x ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh
@@ -84,7 +85,7 @@ chmod +x ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh
 ## Step 4: Create Configuration Files
 
 You need to create three configuration files.
-
+&nbsp;
 **A. MaxMind Secrets File**
 Create `~/.config/maxmind/secrets` and add your credentials. This file must be kept private.
 ```bash
@@ -96,7 +97,7 @@ Set its permissions to `600`:
 ```bash
 chmod 600 ~/.config/maxmind/secrets
 ```
-\
+&nbsp;
 **B. MaxMind Config Loader**
 Create `~/.config/maxmind/config.sh` to load the secrets.
 ```bash
@@ -106,7 +107,7 @@ source "$HOME/.config/maxmind/secrets"
 export DOWNLOAD_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
 export SHA_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz.sha256"
 ```
-\
+&nbsp;
 **C. ufwcheck Config File**
 Create the main configuration file `~/.config/ufwcheck/config.sh`.
 ```bash
@@ -136,7 +137,7 @@ alias geoupdate='geoupdate.sh'
 source "$HOME/.config/ufwcheck/env.sh"
 ```
 Restart your terminal or run `source ~/.bashrc` to apply the changes.
-\
+&nbsp;
 **B. Initial Database Download:** Run `geoupdate` for the first time to download the GeoLite2-City database.
 ```bash
 geoupdate
