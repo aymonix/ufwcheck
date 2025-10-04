@@ -30,10 +30,12 @@ To obtain and manage this database, you will need a free MaxMind account.
 2.  Obtain your Account ID and License Key. These credentials should be configured as described in Step 4.
 
 There are two ways to place the database file in the required location:
+
 &nbsp;
 **Automated Management (Recommended)**
 
 The `geoupdate.sh` script is designed to handle the initial download, and can be scheduled with cron for fully automated subsequent updates. This is the most convenient and reliable method. After configuring your credentials, you will simply run the script as shown in the final step of this guide.
+
 &nbsp;
 **Manual Placement**
 
@@ -52,23 +54,29 @@ mkdir -p ~/.local/bin ~/.local/share/geoip ~/.local/state ~/.config/ufwcheck ~/.
 ## Step 3: Install the Scripts
 
 Download the latest versions of the scripts from the repository and place them in your local bin directory.
+
 &nbsp;
-**A. Download the scripts and their checksums**:
+**A. Download the scripts and their checksums:**
+
 ```bash
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/ufwcheck.sh" -o ~/.local/bin/ufwcheck.sh
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/geoupdate.sh" -o ~/.local/bin/geoupdate.sh
 curl -Lfs "https://raw.githubusercontent.com/aymonix/ufwcheck/main/SHA256SUMS" -o ~/.local/bin/SHA256SUMS
 ```
+
 &nbsp;
-**B. Verify Integrity (Security Check)**
+**B. Verify Integrity (Security Check):**
+
 This step ensures the downloaded scripts are authentic and have not been altered.
 ```bash
 cd ~/.local/bin && sha256sum -c --ignore-missing SHA256SUMS
 ```
+
 If the command completes successfully (you should see `OK` for each script), you can safely remove the checksum file:
 ```bash
 rm ~/.local/bin/SHA256SUMS
 ```
+
 > [!NOTE]
 > If you see a `FAILED` message, it might be due to an incomplete download. Please delete all downloaded files and try the download step again.
 > ```bash
@@ -77,7 +85,8 @@ rm ~/.local/bin/SHA256SUMS
 > If the error persists, please try again later or let us know by creating an **[Issue](https://github.com/aymonix/ufwcheck/issues)**.
 
 &nbsp;
-**C. Make them executable**:
+**C. Make them executable:**
+
 ```bash
 chmod +x ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh
 ```
@@ -85,8 +94,10 @@ chmod +x ~/.local/bin/ufwcheck.sh ~/.local/bin/geoupdate.sh
 ## Step 4: Create Configuration Files
 
 You need to create three configuration files.
+
 &nbsp;
-**A. MaxMind Secrets File**
+**A. MaxMind Secrets File:**
+
 Create `~/.config/maxmind/secrets` and add your credentials. This file must be kept private.
 ```bash
 # Contents for ~/.config/maxmind/secrets
@@ -97,8 +108,10 @@ Set its permissions to `600`:
 ```bash
 chmod 600 ~/.config/maxmind/secrets
 ```
+
 &nbsp;
-**B. MaxMind Config Loader**
+**B. MaxMind Config Loader:*
+*
 Create `~/.config/maxmind/config.sh` to load the secrets.
 ```bash
 # Contents for ~/.config/maxmind/config.sh
@@ -107,8 +120,10 @@ source "$HOME/.config/maxmind/secrets"
 export DOWNLOAD_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
 export SHA_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz.sha256"
 ```
+
 &nbsp;
-**C. ufwcheck Config File**
+**C. ufwcheck Config File:**
+
 Create the main configuration file `~/.config/ufwcheck/config.sh`.
 ```bash
 # Contents for ~/.config/ufwcheck/config.sh
@@ -132,13 +147,19 @@ alias geoupdate='geoupdate.sh'
 
 ## Step 6: Final Steps
 
-**A. Activate the Environment:** Add the following line to your `~/.bashrc` or `~/.zshrc`:
+&nbsp;
+**A. Activate the Environment:**
+
+Add the following line to your `~/.bashrc` or `~/.zshrc`:
 ```bash
 source "$HOME/.config/ufwcheck/env.sh"
 ```
 Restart your terminal or run `source ~/.bashrc` to apply the changes.
+
 &nbsp;
-**B. Initial Database Download:** Run `geoupdate` for the first time to download the GeoLite2-City database.
+**B. Initial Database Download:**
+
+Run `geoupdate` for the first time to download the GeoLite2-City database.
 ```bash
 geoupdate
 ```
