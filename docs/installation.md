@@ -110,8 +110,8 @@ chmod 600 ~/.config/maxmind/secrets
 ```
 
 &nbsp;
-**B. MaxMind Config Loader:*
-*
+**B. MaxMind Config Loader:**
+
 Create `~/.config/maxmind/config.sh` to load the secrets.
 ```bash
 # Contents for ~/.config/maxmind/config.sh
