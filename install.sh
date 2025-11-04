@@ -145,7 +145,7 @@ check_dependencies() {
     echo "To install the required packages for Debian/Ubuntu, please run:"
     echo -e "  ${THEME_INFO}sudo apt-get update && sudo apt-get install ${missing_pkgs[@]}${THEME_RESET}"
     echo "After installation, please run this script again."
-    exit 1
+    return 1
   fi
   echo "All required tools are present."
 }
@@ -279,12 +279,12 @@ EOF
   if ! (cd "$BIN_DIR" && sha256sum -c --ignore-missing --status SHA256SUMS); then
     echo -e "${THEME_WARN}ERROR: Checksum mismatch! The downloaded scripts may be compromised.${THEME_RESET}" >&2
     echo "Aborting installation to ensure system safety." >&2
-    
+
     # Clean up potentially compromised or incomplete files.
     rm -f "$UFWCHECK_SCRIPT_PATH" "$GEOUPDATE_SCRIPT_PATH" "$SHA_SUM_PATH"
-    exit 1
+    return 1
   fi
-  
+
   # Clean up the checksum file after successful verification.
   rm -f "$SHA_SUM_PATH"
   echo -e "${THEME_SUCCESS}Scripts verified successfully.${THEME_RESET}"
