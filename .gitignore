@@ -7,3 +7,6 @@ secrets
 
 # MaxMind database file
 *.mmdb
+
+# Directory for test execution artifacts
+/tests/logs/
