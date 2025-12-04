@@ -193,7 +193,7 @@ check_environment() {
       echo "[✘] Error: GeoIP database not found or not readable at '$MMDB_FILE'." >&2
       exit 1
   fi
-  
+
   mkdir -p "$STATE_DIR"
 }
 
@@ -330,7 +330,7 @@ geo_data() {
 # ==============================================================================
 format_json() {
   local tmp_ips="$1"
-  
+
   geo_data "$tmp_ips" | jq -R -s '
     split("\n") | .[0:-1] | map(
       split("\t") | {
@@ -399,7 +399,7 @@ extract_data() {
   local dates
   local month_num
   local limit_pipe=("cat")
-  
+
   case "$mode" in
     today) date_regex="^$(LC_TIME=C date '+%Y-%m-%d')T";;
     date)
@@ -496,4 +496,6 @@ main() {
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
