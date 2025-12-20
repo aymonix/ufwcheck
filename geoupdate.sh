@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: geoupdate.sh
 # AUTHOR: Aymon
-# DATE:   2025-09-26
-# VERSION: 1.1.0
+# DATE:   2025-12-12
+# VERSION: 1.2.0
 #
 # DESCRIPTION
 #   Downloads and verifies the latest GeoLite2-City.mmdb database from MaxMind.
@@ -12,8 +12,8 @@
 #   directory, and logs all operations with timestamps.
 #
 # DEPENDENCIES
-#   - curl, awk, sha256sum, tar
-#   - A valid MaxMind account and credentials configured in ~/.config/maxmind/
+#   curl, awk, sha256sum, tar
+#   A valid MaxMind account and credentials configured in ~/.config/maxmind/
 #
 # USAGE
 #   geoupdate.sh
@@ -34,10 +34,40 @@ readonly MAXMIND_CONFIG_FILE="$HOME/.config/maxmind/config.sh"
 
 # ==============================================================================
 # DESCRIPTION
+#   Checks if all required command-line tools are installed.
+#
+# OUTPUTS
+#   Writes error messages to STDERR if tools are missing.
+#
+# RETURNS
+#   Exits the script with code 1 if dependencies are missing.
+# ==============================================================================
+check_dependencies() {
+  local missing_deps=0
+  for cmd in curl awk sha256sum tar; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "ERROR: Required command not found: '$cmd'. Please install it." >&2
+      ((missing_deps++))
+    fi
+  done
+  if ((missing_deps > 0)); then
+    exit 1
+  fi
+}
+
+# ==============================================================================
+# DESCRIPTION
 #   Encapsulates the core update logic: download, verification, and unpacking.
 #
 # GLOBAL VARIABLES
 #   MAXMIND_ID, MAXMIND_TOKEN, MMDB_FILE, STATE_DIR, DOWNLOAD_URL, SHA_URL
+#   tmp_dir (modified)
+#
+# OUTPUTS
+#   Writes status messages to STDOUT and error messages to STDERR.
+#
+# RETURNS
+#   Exits the script with code 1 on network, checksum, or security errors.
 # ==============================================================================
 run_update() {
   if [[ -z "${MAXMIND_ID:-}" ]]; then
@@ -54,8 +84,7 @@ run_update() {
 
   mkdir -p "$geoip_data_dir"
 
-  # Create a temporary directory.
-  local tmp_dir
+  # Variable must be global to survive function scope for the EXIT trap
   tmp_dir="$(mktemp -d "$STATE_DIR/geoupdate.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -69,8 +98,12 @@ run_update() {
   curl -s -f -u "$MAXMIND_ID:$MAXMIND_TOKEN" -L "$SHA_URL" -o "$tmp_sha256"
 
   echo "Verifying checksum..."
-  # sha256sum -c requires running from the archive's directory
-  if ! (cd "$tmp_dir" && sha256sum -c --status "$tmp_sha256"); then
+  # Extract hash to ignore upstream filename mismatches.
+  local expected_hash
+  expected_hash=$(awk '{print $1}' "$tmp_sha256")
+
+  # Validate local file via constructed stdin input.
+  if ! (cd "$tmp_dir" && echo "$expected_hash  GeoLite2-City.tar.gz" | sha256sum -c --status); then
     echo "ERROR: SHA256 mismatch! The downloaded file may be corrupt." >&2
     exit 1
   fi
@@ -96,8 +129,16 @@ run_update() {
 #
 # GLOBAL VARIABLES
 #   UFWCHECK_CONFIG_FILE, MAXMIND_CONFIG_FILE
+#
+# OUTPUTS
+#   Writes formatted log entries to the log file and STDOUT.
+#
+# RETURNS
+#   Exits the script with code 1 if configuration files are missing.
 # ==============================================================================
 main() {
+  check_dependencies
+
   # Load project paths from the ufwcheck config.
   if [[ ! -r "$UFWCHECK_CONFIG_FILE" ]]; then
     echo "ERROR: Cannot read ufwcheck config file: $UFWCHECK_CONFIG_FILE" >&2
