@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: install.sh
 # AUTHOR: Aymon
-# DATE:   2025-09-26
-# VERSION: 1.1.0
+# DATE:   2025-12-12
+# VERSION: 1.2.0
 #
 # DESCRIPTION
 #   Automates the installation of the ufwcheck tool suite. It follows the XDG
@@ -11,8 +11,11 @@
 #   The script operates with user permissions and does not require sudo,
 #   except for prompting the user to install missing system dependencies.
 #
-#   Installation Steps:
-#   1. Checks for required command-line tools.
+# DEPENDENCIES
+#   curl, python3, python3-maxminddb, column, jq, sha256sum, crontab
+#
+# INSTALLATION STEPS
+#   1. Checks for required command-line tools and Python libraries.
 #   2. Creates necessary directories and configuration, then downloads and verifies
 #      the core scripts (ufwcheck.sh, geoupdate.sh).
 #   3. Interactively configures MaxMind API credentials.
@@ -78,8 +81,7 @@ readonly UFWCHECK_ENV_FILE="${UFWCHECK_CONFIG_DIR}/env.sh"
 #   $1 - The text to display in the header.
 #
 # GLOBAL VARIABLES
-#   THEME_HEADER
-#   THEME_RESET
+#   THEME_HEADER, THEME_RESET
 # ==============================================================================
 print_header() {
   echo -e "\n${THEME_HEADER}--- $1 ---${THEME_RESET}"
@@ -101,11 +103,9 @@ command_exists() {
 
 # ==============================================================================
 # DESCRIPTION
-#   Checks for required system dependencies. If any are missing, it provides
-#   the user with a command to install them and exits.
-#
-# ARGUMENTS
-#   None
+#   Checks for required system dependencies, including Python 3 and the
+#   MaxMindDB library. If any are missing, it provides the user with a command
+#   to install them and returns an error code.
 #
 # GLOBAL VARIABLES
 #   THEME_WARN, THEME_SUCCESS, THEME_INFO, THEME_RESET, C_BOLD
@@ -118,7 +118,7 @@ check_dependencies() {
 
   declare -A CMD_TO_PKG=(
     [curl]="curl"
-    [mmdblookup]="mmdb-bin"
+    [python3]="python3"
     [column]="util-linux"
     [crontab]="cron"
     [jq]="jq"
@@ -128,6 +128,7 @@ check_dependencies() {
   local missing_pkgs=()
   local all_deps_found=true
 
+  # 1. Check binary tools
   for cmd in "${!CMD_TO_PKG[@]}"; do
     if ! command_exists "$cmd"; then
       all_deps_found=false
@@ -140,10 +141,25 @@ check_dependencies() {
     fi
   done
 
+  # 2. Check Python library (maxminddb)
+  if command_exists "python3"; then
+    echo -n "Checking for Python library 'maxminddb'... "
+    if python3 -c "import maxminddb" 2>/dev/null; then
+      echo -e "${THEME_SUCCESS}Found.${THEME_RESET}"
+    else
+      echo -e "${THEME_WARN}Not found.${THEME_RESET}"
+      all_deps_found=false
+      # Check if package is already in list to avoid duplicates
+      if [[ ! " ${missing_pkgs[*]} " =~ " python3-maxminddb " ]]; then
+        missing_pkgs+=("python3-maxminddb")
+      fi
+    fi
+  fi
+
   if ! $all_deps_found; then
     echo -e "\n${C_BOLD}${THEME_WARN}ACTION REQUIRED: One or more dependencies are missing.${THEME_RESET}"
     echo "To install the required packages for Debian/Ubuntu, please run:"
-    echo -e "  ${THEME_INFO}sudo apt-get update && sudo apt-get install ${missing_pkgs[@]}${THEME_RESET}"
+    echo -e "  ${THEME_INFO}sudo apt-get update && sudo apt-get install ${missing_pkgs[*]}${THEME_RESET}"
     echo "After installation, please run this script again."
     return 1
   fi
@@ -155,9 +171,6 @@ check_dependencies() {
 #   Interactively configures MaxMind API credentials, giving the user the
 #   choice between automatic setup and manual configuration. It creates both
 #   the 'secrets' file and the configuration loader.
-#
-# ARGUMENTS
-#   None
 #
 # GLOBAL VARIABLES
 #   MAXMIND_CONFIG_DIR, MAXMIND_SECRETS_FILE, MAXMIND_CONFIG_FILE
@@ -224,11 +237,8 @@ EOF
 
 # ==============================================================================
 # DESCRIPTION
-#   Creates XDG-compliant directories, downloads and verifies the main scripts
-#   from GitHub, and creates the default ufwcheck configuration file.
-#
-# ARGUMENTS
-#   None
+#   Creates XDG-compliant directories, downloads scripts, verifies integrity,
+#   and creates the default ufwcheck configuration.
 #
 # GLOBAL VARIABLES
 #   BIN_DIR, GEOIP_DATA_DIR, STATE_DIR, UFWCHECK_CONFIG_DIR
@@ -239,11 +249,9 @@ EOF
 install_files() {
   print_header "Installing Scripts and Configuration"
 
-  # Step 1: Create all necessary XDG-compliant directories.
   echo "Creating standard XDG directories..."
   mkdir -p "$BIN_DIR" "$GEOIP_DATA_DIR" "$STATE_DIR" "$UFWCHECK_CONFIG_DIR"
 
-  # Step 2: Create the default configuration file for ufwcheck.
   echo "Creating default configuration file for ufwcheck..."
   cat > "$UFWCHECK_CONFIG_FILE" << EOF
 #!/usr/bin/env bash
@@ -263,7 +271,6 @@ OUTPUT_LOG="$STATE_DIR/ufwcheck.log"
 EOF
   echo -e "${THEME_SUCCESS}Successfully created ${UFWCHECK_CONFIG_FILE}.${THEME_RESET}"
 
-  # Step 3: Download the main scripts and checksum file from GitHub.
   local base_url="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
   local ufwcheck_url="${base_url}/ufwcheck.sh"
   local geoupdate_url="${base_url}/geoupdate.sh"
@@ -274,22 +281,19 @@ EOF
   curl -Lfs "$geoupdate_url" -o "$GEOUPDATE_SCRIPT_PATH"
   curl -Lfs "$sha_url" -o "$SHA_SUM_PATH"
 
-  # Step 4: Verify the integrity of the downloaded scripts using sha256sum.
   echo "Verifying script integrity..."
   if ! (cd "$BIN_DIR" && sha256sum -c --ignore-missing --status SHA256SUMS); then
     echo -e "${THEME_WARN}ERROR: Checksum mismatch! The downloaded scripts may be compromised.${THEME_RESET}" >&2
     echo "Aborting installation to ensure system safety." >&2
-
+    
     # Clean up potentially compromised or incomplete files.
     rm -f "$UFWCHECK_SCRIPT_PATH" "$GEOUPDATE_SCRIPT_PATH" "$SHA_SUM_PATH"
     return 1
   fi
-
-  # Clean up the checksum file after successful verification.
+  
   rm -f "$SHA_SUM_PATH"
   echo -e "${THEME_SUCCESS}Scripts verified successfully.${THEME_RESET}"
 
-  # Step 5: Set executable permissions for the scripts.
   echo "Setting executable permissions..."
   chmod +x "$UFWCHECK_SCRIPT_PATH" "$GEOUPDATE_SCRIPT_PATH"
   echo -e "${THEME_SUCCESS}Scripts installed successfully to ${BIN_DIR}.${THEME_RESET}"
@@ -299,12 +303,8 @@ EOF
 # DESCRIPTION
 #   Creates the shell environment file with PATH adjustments and aliases.
 #
-# ARGUMENTS
-#   None
-#
 # GLOBAL VARIABLES
-#   UFWCHECK_ENV_FILE
-#   BIN_DIR
+#   UFWCHECK_ENV_FILE, BIN_DIR
 # ==============================================================================
 setup_environment() {
   print_header "Setting up Shell Environment"
@@ -315,7 +315,7 @@ setup_environment() {
 # This file is sourced by your shell profile (e.g., .bashrc).
 
 # Add the user's local binary directory to the PATH.
-export PATH="${BIN_DIR}:$PATH"
+export PATH="${BIN_DIR}:\$PATH"
 
 # Convenient aliases.
 alias ufwcheck='ufwcheck.sh'
@@ -327,9 +327,6 @@ EOF
 # ==============================================================================
 # DESCRIPTION
 #   Interactively offers to set up a weekly cron job for database updates.
-#
-# ARGUMENTS
-#   None
 #
 # GLOBAL VARIABLES
 #   GEOUPDATE_SCRIPT_PATH
@@ -358,9 +355,6 @@ configure_cron() {
 # DESCRIPTION
 #   Prints the final, mandatory manual steps for the user to complete.
 #
-# ARGUMENTS
-#   None
-#
 # GLOBAL VARIABLES
 #   UFWCHECK_ENV_FILE
 #   THEME_CMD, C_BOLD, THEME_RESET
@@ -375,7 +369,6 @@ final_instructions() {
   echo -e "  ${THEME_CMD}geoupdate.sh${THEME_RESET}"
 }
 
-
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
@@ -388,6 +381,7 @@ main() {
   final_instructions
 }
 
+# Guard to allow sourcing the script for testing without execution.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
