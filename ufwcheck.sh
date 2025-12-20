@@ -2,19 +2,21 @@
 # ==============================================================================
 # SCRIPT: ufwcheck.sh
 # AUTHOR: Aymon
-# DATE:   2025-09-26
-# VERSION: 1.1.0
+# DATE:   2025-12-12
+# VERSION: 1.2.0
 #
 # DESCRIPTION
 #   Analyzes UFW (Uncomplicated Firewall) logs to identify and report on IP
 #   addresses with multiple block events. It offers flexible filtering by date,
 #   excludes private networks, and can output results as a formatted table
-#   or in JSON format. Geo-location data (country, city) is added for each IP.
+#   or in JSON format.
+#
+#   Geo-location data (country, city) is enriched using an embedded Python 3
+#   engine for batch processing.
 #
 # DEPENDENCIES
-#   - Standard UNIX utils: grep, awk, sort, head, column
-#   - mmdblookup (from mmdb-bin): For querying the GeoLite2-City database.
-#   - jq: For generating JSON output.
+#   grep, awk, sort, head, column (coreutils), jq
+#   python3 (with python3-maxminddb library)
 #
 # USAGE
 #   ./ufwcheck.sh [OPTIONS]
@@ -32,7 +34,7 @@ declare -r -A MONTH_MAP=(
   [Jan]=01 [Feb]=02 [Mar]=03 [Apr]=04 [May]=05 [Jun]=06
   [Jul]=07 [Aug]=08 [Sep]=09 [Oct]=10 [Nov]=11 [Dec]=12
 )
-readonly PRIVATE_IP_REGEX="^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^127\."
+readonly PRIVATE_IP_REGEX='^192[.]168[.]|^10[.]|^172[.](1[6-9]|2[0-9]|3[0-1])[.]|^127[.]'
 
 # Fixed path to the configuration file sourced on startup.
 readonly UFWCHECK_CONFIG_FILE="${HOME}/.config/ufwcheck/config.sh"
@@ -110,7 +112,7 @@ validate_positive_integer() {
 # ==============================================================================
 check_dependencies() {
   local missing_deps=0
-  for cmd in grep awk sort head column mmdblookup jq; do
+  for cmd in grep awk sort head column python3 jq; do
     if ! command -v "$cmd" &>/dev/null; then
       echo "[✘] Error: Required command not found: '$cmd'. Please install it." >&2
       ((missing_deps++))
@@ -260,9 +262,8 @@ parse_arguments() {
 
 # ==============================================================================
 # DESCRIPTION
-#   Takes raw IP data, enriches it with GeoIP information using a batch
-#   database lookup, and outputs a universal, tab-separated stream of
-#   enriched data.
+#   Takes raw IP data (stdin), enriches it with GeoIP information using an
+#   embedded Python script for batch processing.
 #
 # ARGUMENTS
 #   $1 - The path to the temporary file containing raw "count ip" data.
@@ -275,50 +276,47 @@ parse_arguments() {
 # ==============================================================================
 geo_data() {
   local tmp_ips="$1"
-  local mmdb_stream
+  cat "$tmp_ips" | python3 -c '
+import sys
+import maxminddb
 
-  # Step 1: Get the raw data stream from mmdblookup in a single batch call.
-  mmdb_stream=$(awk '{print $2}' "$tmp_ips" | mmdblookup --file "$MMDB_FILE" --ip - 2>/dev/null)
+try:
+    reader = maxminddb.open_database(sys.argv[1])
+except Exception:
+    # Fail silently or handle error if DB is invalid (bash checks existence)
+    sys.exit(0)
 
-  # Step 2: Join original "count ip" data with the parsed mmdb_stream.
-  paste "$tmp_ips" <(
-    echo "$mmdb_stream" | awk '
-      BEGIN { RS = "" }
-      {
+for line in sys.stdin:
+    try:
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+
+        count = parts[0]
+        ip = parts[1]
+
         country = "-"
         city = "-"
-        in_country_names = 0
-        in_city_names = 0
 
-        for (i = 1; i <= NF; i++) {
-          if ($i == "\"country\":") { in_country_names = 1 }
-          if ($i == "\"city\":") { in_city_names = 1 }
+        rec = reader.get(ip)
 
-          if (in_country_names && $i == "\"en\":") {
-            value = ""
-            for (j = i + 1; j <= NF; j++) {
-              if ($(j) ~ /</) { break }
-              value = value (value == "" ? "" : " ") $(j)
-            }
-            country = value
-            in_country_names = 0
-          }
-          if (in_city_names && $i == "\"en\":") {
-            value = ""
-            for (j = i + 1; j <= NF; j++) {
-              if ($(j) ~ /</) { break }
-              value = value (value == "" ? "" : " ") $(j)
-            }
-            city = value
-            in_city_names = 0
-          }
-        }
-        gsub(/^"|"/, "", country)
-        gsub(/^"|"/, "", city)
-        print country "\t" city
-      }
-    '
-  ) | awk '{printf "%s\t%s\t%s\t%s\n", $2, $1, $3, $4}'
+        if rec:
+            try:
+                country = rec["country"]["names"]["en"]
+            except KeyError:
+                pass
+
+            try:
+                city = rec["city"]["names"]["en"]
+            except KeyError:
+                pass
+
+        print(f"{ip}\t{count}\t{country}\t{city}")
+
+    except Exception:
+        # Skip malformed lines or lookup errors to keep stream alive
+        continue
+' "$MMDB_FILE"
 }
 
 # ==============================================================================
@@ -426,10 +424,16 @@ extract_data() {
   fi
 
   final_regex="${date_regex}.*UFW BLOCK"
+
+  # Disable pipefail to ignore SIGPIPE from 'head' in huge logs.
+  set +o pipefail
+
   grep -E "$final_regex" "$LOG_FILE" | \
   process_logs "$filter_private" "$min_attempts" | \
   sort -nr | \
   "${limit_pipe[@]}" > "$tmp_ips"
+
+  set -o pipefail
 }
 
 # ==============================================================================
@@ -468,8 +472,10 @@ main() {
   local min_attempts=2
   local json_mode="false"
   local filter_private="false"
-  local tmp_ips
-  local tmp_out
+
+  # Variables must be global to survive main() scope for the EXIT trap
+  tmp_ips=""
+  tmp_out=""
 
   check_environment
 
