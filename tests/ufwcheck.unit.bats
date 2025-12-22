@@ -5,7 +5,7 @@ load "${BATS_TEST_DIRNAME}/test_helper/bats-assert/load.bash"
 
 setup() {
   export HOME="$(mktemp -d)"
-  STUB_DIR=$(mktemp -d)
+  export STUB_DIR="$(mktemp -d)"
   export PATH="$STUB_DIR:$PATH"
 }
 
@@ -50,6 +50,7 @@ teardown() {
 
 @test "ufwcheck.unit: check_dependencies() - when all dependencies exist - should exit 0" {
   run bash -c '
+    # Mock command to always succeed, simulating installed tools.
     command() { return 0; }
     source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
     check_dependencies
@@ -60,13 +61,52 @@ teardown() {
 
 @test "ufwcheck.unit: check_dependencies() - when a dependency is missing - should print error and exit 1" {
   run bash -c '
-    command() { [[ "$2" == "mmdblookup" ]] && return 1; return 0; }
+    # Mock command to fail specifically for "jq".
+    command() {
+      if [[ "$2" == "jq" ]]; then
+        return 1
+      fi
+      return 0
+    }
     source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
     check_dependencies
   '
 
   assert_failure 1
-  assert_output --partial "Required command not found: 'mmdblookup'"
+  assert_output --partial "Required command not found: 'jq'"
+}
+
+@test "ufwcheck.unit: check_environment() - when log dir is inaccessible - should exit 1" {
+  # Create a directory with no permissions (000) to trigger -r/-x checks.
+  local restricted_dir="$HOME/restricted_logs"
+  mkdir -p "$restricted_dir"
+  chmod 000 "$restricted_dir"
+
+  # Pass dummy script name ($0) and directory ($1) to avoid basename errors.
+  run bash -c '
+    target_dir="$1"
+
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    
+    # Mock dependencies to bypass that check.
+    check_dependencies() { return 0; }
+    
+    # Ensure config dir exists before creating file (config path is internal to script).
+    mkdir -p "$(dirname "$UFWCHECK_CONFIG_FILE")"
+
+    cat > "$UFWCHECK_CONFIG_FILE" <<EOF
+LOG_FILE="$target_dir/ufw.log"
+MMDB_FILE="$HOME/db.mmdb"
+EOF
+    
+    check_environment
+  ' "ufwcheck_mock" "$restricted_dir"
+  
+  # Cleanup permissions so teardown can remove it.
+  chmod 700 "$restricted_dir"
+
+  assert_failure 1
+  assert_output --partial "directory not found or not readable"
 }
 
 # ARGUMENT PARSING
@@ -76,6 +116,7 @@ teardown() {
     source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
     parse_arguments -d 7 --json -t 20 --no-private
     
+    # Dump internal state to stdout for verification.
     echo "mode=$mode"
     echo "value=$value"
     echo "json_mode=$json_mode"
@@ -111,10 +152,67 @@ teardown() {
   assert_output --partial "Error: Unknown option '--nonexistent-flag'"
 }
 
+@test "ufwcheck.unit: parse_arguments() - with --days > 366 - should print error and exit 2" {
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    parse_arguments --days 400
+  '
+
+  assert_failure 2
+  assert_output --partial "Maximum allowed value for '--days' is 366"
+}
+
+# LOG STREAMING
+
+@test "ufwcheck.unit: ufw_log_stream() - mode=today - should read only current logs" {
+  local mock_dir="$HOME/logs"
+  mkdir -p "$mock_dir"
+  
+  # Create files with specific markers.
+  echo "DATA_CURRENT" > "$mock_dir/ufw.log"
+  echo "DATA_YESTERDAY" > "$mock_dir/ufw.log.1"
+  echo "DATA_OLD" | gzip > "$mock_dir/ufw.log.2.gz"
+
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    export LOG_FILE="'"$mock_dir"'/ufw.log"
+    mode="today"
+    
+    ufw_log_stream
+  '
+
+  assert_success
+  assert_output --partial "DATA_CURRENT"
+  assert_output --partial "DATA_YESTERDAY"
+  # Should NOT read archived files in "today" mode.
+  refute_output --partial "DATA_OLD"
+}
+
+@test "ufwcheck.unit: ufw_log_stream() - mode=days - should read ALL logs" {
+  local mock_dir="$HOME/logs"
+  mkdir -p "$mock_dir"
+  
+  echo "DATA_CURRENT" > "$mock_dir/ufw.log"
+  echo "DATA_YESTERDAY" > "$mock_dir/ufw.log.1"
+  echo "DATA_OLD" | gzip > "$mock_dir/ufw.log.2.gz"
+
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    export LOG_FILE="'"$mock_dir"'/ufw.log"
+    mode="days"
+    
+    ufw_log_stream
+  '
+
+  assert_success
+  assert_output --partial "DATA_CURRENT"
+  assert_output --partial "DATA_YESTERDAY"
+  assert_output --partial "DATA_OLD"
+}
+
 # LOG PROCESSING (AWK LOGIC)
 
 @test "ufwcheck.unit: process_logs()(awk) - with standard log lines - should correctly count IPs and exit 0" {
-  # Isolate awk script from its bash wrapper to test as a pure unit.
   local awk_script='
     /UFW BLOCK/ {
         for(i=1; i<=NF; i++) {
@@ -137,6 +235,7 @@ teardown() {
         }
     }
   '
+  
   local log_input
   log_input=$(cat <<LOG
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=8.8.8.8 DST=...
@@ -146,12 +245,12 @@ teardown() {
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=8.8.8.8 DST=...
 LOG
 )
-  # Use `bash -c` for reliable stderr redirection, passing script via $1.
+
   run bash -c '
     awk \
       -v min_attempts="2" \
       -v filter_private="false" \
-      -v private_ip_regex="^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2[0-9]|3[0-1])\\.|^127\\." \
+      -v private_ip_regex="^192[.]168[.]|^10[.]|^172[.](1[6-9]|2[0-9]|3[0-1])[.]|^127[.]" \
       "$1" 2>/dev/null
   ' "bash" "$awk_script" <<< "$log_input"
 
@@ -182,6 +281,7 @@ LOG
         }
     }
   '
+  
   local log_input
   log_input=$(cat <<LOG
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=8.8.8.8 DST=...
@@ -191,11 +291,12 @@ LOG
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=192.168.1.10 DST=...
 LOG
 )
+
   run bash -c '
     awk \
       -v min_attempts="2" \
       -v filter_private="true" \
-      -v private_ip_regex="^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2[0-9]|3[0-1])\\.|^127\\." \
+      -v private_ip_regex="^192[.]168[.]|^10[.]|^172[.](1[6-9]|2[0-9]|3[0-1])[.]|^127[.]" \
       "$1" 2>/dev/null
   ' "bash" "$awk_script" <<< "$log_input"
 
@@ -226,6 +327,7 @@ LOG
         }
     }
   '
+  
   local log_input
   log_input=$(cat <<LOG
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=8.8.8.8 DST=...
@@ -233,11 +335,12 @@ LOG
 [UFW BLOCK] IN=eth0 OUT= MAC=... SRC=8.8.8.8 DST=...
 LOG
 )
+
   run bash -c '
     awk \
       -v min_attempts="4" \
       -v filter_private="false" \
-      -v private_ip_regex="^192\\.168\\.|^10\\.|^172\\.(1[6-9]|2[0-9]|3[0-1])\\.|^127\\." \
+      -v private_ip_regex="^192[.]168[.]|^10[.]|^172[.](1[6-9]|2[0-9]|3[0-1])[.]|^127[.]" \
       "$1" 2>/dev/null
   ' "bash" "$awk_script" <<< "$log_input"
 
@@ -255,6 +358,7 @@ geo_data() {
 }
 EOF
 )
+
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
 
@@ -280,7 +384,6 @@ EOF
 ]
 JSON
 )
-  # Use --partial to ignore potential trailing newlines from jq.
   assert_output --partial "$expected_json"
 }
 
@@ -320,7 +423,6 @@ EOF
   local column_capture_file
   column_capture_file=$(mktemp)
   
-  # Mock column: capture args line-by-line and pass output.
   cat > "$STUB_DIR/column" <<EOF
 #!/usr/bin/env bash
 printf "%s\n" "\$@" > "$column_capture_file"
@@ -373,7 +475,6 @@ EOF
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
       eval "$1"
       export OUTPUT_LOG="/dev/null"
-      
       format_table "/dev/null" "$2"
     } 2>/dev/null
   ' "bash" "$geo_data_override" "$tmp_out_file"
@@ -394,51 +495,66 @@ date() {
 }
 EOF
 )
+
   local grep_capture_file
   grep_capture_file=$(mktemp)
   cat > "$STUB_DIR/grep" <<EOF
 #!/usr/bin/env bash
 echo "\$@" > "$grep_capture_file"
+echo "mock_log_line"
 EOF
   chmod +x "$STUB_DIR/grep"
 
-  local process_logs_override
-  process_logs_override=$(cat <<'EOF'
-process_logs() {
-  cat > /dev/null
+  # Mock ufw_log_stream to avoid filesystem operations during pipeline test.
+  local ufw_stream_mock
+  ufw_stream_mock=$(cat <<'EOF'
+ufw_log_stream() {
+  echo "mock_log_line"
 }
 EOF
 )
+
+  cat > "$STUB_DIR/sort" <<EOF
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$STUB_DIR/sort"
+
+  cat > "$STUB_DIR/process_logs" <<EOF
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$STUB_DIR/process_logs"
+
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
 
   run bash -c '
     {
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
-      eval "$1"
-      eval "$2"
-      
-      # FIX: Initialize all globals used by extract_data to satisfy set -u
+      eval "$1" # Apply date mock
+      eval "$2" # Apply ufw_stream mock
+      unset -f process_logs
+
       export LOG_FILE="/dev/null"
       export top_limit=""
       export filter_private="false"
       export min_attempts="1"
-      
+
       mode="today"
-      
+
       extract_data "$3"
     } 2>/dev/null
-  ' "bash" "$date_override" "$process_logs_override" "$tmp_ips_file"
-  
+  ' "bash" "$date_override" "$ufw_stream_mock" "$tmp_ips_file"
+
   rm "$tmp_ips_file"
 
   assert_success
-  
+
   local captured_grep_args
   captured_grep_args=$(cat "$grep_capture_file")
   rm "$grep_capture_file"
-  
-  # Verify regex contains the mocked date
+
   assert [ "${captured_grep_args#*^2025-01-01T}" != "$captured_grep_args" ]
 }
 
@@ -451,13 +567,18 @@ echo "\$@" > "$grep_capture_file"
 EOF
   chmod +x "$STUB_DIR/grep"
 
-  local process_logs_override
-  process_logs_override=$(cat <<'EOF'
-process_logs() {
-  cat > /dev/null
-}
+  cat > "$STUB_DIR/process_logs" <<EOF
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$STUB_DIR/process_logs"
+
+  local ufw_stream_mock
+  ufw_stream_mock=$(cat <<'EOF'
+ufw_log_stream() { :; }
 EOF
 )
+
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
 
@@ -465,8 +586,8 @@ EOF
     {
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
       eval "$1"
+      unset -f process_logs
       
-      # Initialize globals to satisfy set -u
       export LOG_FILE="/dev/null"
       export top_limit=""
       export filter_private="false"
@@ -477,7 +598,7 @@ EOF
       
       extract_data "$2"
     } 2>/dev/null
-  ' "bash" "$process_logs_override" "$tmp_ips_file"
+  ' "bash" "$ufw_stream_mock" "$tmp_ips_file"
   
   rm "$tmp_ips_file"
 
@@ -491,7 +612,6 @@ EOF
 }
 
 @test "ufwcheck.unit: extract_data() - with --days filter - should call grep with correct date alternatives and exit 0" {
-  # Mock date to return specific dates based on the offset argument ($2).
   local date_override
   date_override=$(cat <<'EOF'
 date() {
@@ -510,13 +630,18 @@ echo "\$@" > "$grep_capture_file"
 EOF
   chmod +x "$STUB_DIR/grep"
 
-  local process_logs_override
-  process_logs_override=$(cat <<'EOF'
-process_logs() {
-  cat > /dev/null
-}
+  cat > "$STUB_DIR/process_logs" <<EOF
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$STUB_DIR/process_logs"
+
+  local ufw_stream_mock
+  ufw_stream_mock=$(cat <<'EOF'
+ufw_log_stream() { :; }
 EOF
 )
+
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
 
@@ -525,8 +650,8 @@ EOF
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
       eval "$1"
       eval "$2"
+      unset -f process_logs
       
-      # Initialize globals to satisfy set -u
       export LOG_FILE="/dev/null"
       export top_limit=""
       export filter_private="false"
@@ -537,7 +662,7 @@ EOF
       
       extract_data "$3"
     } 2>/dev/null
-  ' "bash" "$date_override" "$process_logs_override" "$tmp_ips_file"
+  ' "bash" "$date_override" "$ufw_stream_mock" "$tmp_ips_file"
   
   rm "$tmp_ips_file"
 
@@ -547,7 +672,6 @@ EOF
   captured_grep_args=$(cat "$grep_capture_file")
   rm "$grep_capture_file"
   
-  # Verify regex contains pipe-separated dates: ^2025-01-02T|^2025-01-01T
   assert [ "${captured_grep_args#*^2025-01-02T|^2025-01-01T}" != "$captured_grep_args" ]
 }
 
@@ -560,13 +684,18 @@ echo "\$@" > "$grep_capture_file"
 EOF
   chmod +x "$STUB_DIR/grep"
 
-  local process_logs_override
-  process_logs_override=$(cat <<'EOF'
-process_logs() {
-  cat > /dev/null
-}
+  cat > "$STUB_DIR/process_logs" <<EOF
+#!/usr/bin/env bash
+cat
+EOF
+  chmod +x "$STUB_DIR/process_logs"
+
+  local ufw_stream_mock
+  ufw_stream_mock=$(cat <<'EOF'
+ufw_log_stream() { :; }
 EOF
 )
+
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
 
@@ -574,34 +703,34 @@ EOF
     {
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
       eval "$1"
-      
+      unset -f process_logs
+
       export LOG_FILE="/dev/null"
       export top_limit=""
       export filter_private="false"
       export min_attempts="1"
-      
+
       mode="month"
       value="Feb"
-      
+
       extract_data "$2"
     } 2>/dev/null
-  ' "bash" "$process_logs_override" "$tmp_ips_file"
-  
+  ' "bash" "$ufw_stream_mock" "$tmp_ips_file"
+
   rm "$tmp_ips_file"
 
   assert_success
-  
-  # Read captured args to avoid bash globbing issues with brackets [ ] in variables.
+
   run cat "$grep_capture_file"
   rm "$grep_capture_file"
-  
-  # Verify regex corresponds to Feb (02): ^....-02-[0-9][0-9]T
+
   assert_output --partial "^....-02-[0-9][0-9]T"
 }
 
 @test "ufwcheck.unit: extract_data() - with --top N filter - should call head with correct limit and exit 0" {
   local head_capture_file
   head_capture_file=$(mktemp)
+  
   cat > "$STUB_DIR/head" <<EOF
 #!/usr/bin/env bash
 printf "%s\n" "\$@" > "$head_capture_file"
@@ -611,7 +740,7 @@ EOF
 
   cat > "$STUB_DIR/grep" <<EOF
 #!/usr/bin/env bash
-echo "mock_data"
+echo "mock_log_line"
 EOF
   chmod +x "$STUB_DIR/grep"
 
@@ -621,12 +750,17 @@ cat
 EOF
   chmod +x "$STUB_DIR/sort"
 
-  # Mock process_logs as script for pipeline visibility.
   cat > "$STUB_DIR/process_logs" <<EOF
 #!/usr/bin/env bash
 cat
 EOF
   chmod +x "$STUB_DIR/process_logs"
+
+  local ufw_stream_mock
+  ufw_stream_mock=$(cat <<'EOF'
+ufw_log_stream() { echo "data"; }
+EOF
+)
 
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
@@ -634,6 +768,7 @@ EOF
   run bash -c '
     {
       source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      eval "$1"
       unset -f process_logs
       
       export LOG_FILE="/dev/null"
@@ -643,9 +778,9 @@ EOF
       export filter_private="false"
       export min_attempts="1"
       
-      extract_data "$1"
+      extract_data "$2"
     } 2>/dev/null
-  ' "bash" "$tmp_ips_file"
+  ' "bash" "$ufw_stream_mock" "$tmp_ips_file"
   
   rm "$tmp_ips_file"
 
@@ -669,20 +804,13 @@ EOF
 
   local tmp_ips_file
   tmp_ips_file=$(mktemp)
-  
-  # Capture stderr to file to prevent 'set -e' termination.
   local stderr_log
   stderr_log=$(mktemp)
-
-  # Statically strip 'main' execution to enable safe sourcing.
-  local safe_script
-  safe_script=$(mktemp)
-  grep -Fv 'main "$@"' "${BATS_TEST_DIRNAME}/../ufwcheck.sh" > "$safe_script"
 
   # CASE 1: Invalid Date Format
   run bash -c '
     exec 2> "$3"
-    source "$4"
+    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh")
     eval "$1"
     
     export LOG_FILE="/dev/null"
@@ -691,17 +819,17 @@ EOF
     export min_attempts="1"
     
     mode="date"
-    value="2025/07/26" # Invalid format
+    value="2025/07/26"
     
     extract_data "$2"
-  ' "bash" "$process_logs_override" "$tmp_ips_file" "$stderr_log" "$safe_script"
+  ' "bash" "$process_logs_override" "$tmp_ips_file" "$stderr_log"
   
   assert_failure 2
 
   # CASE 2: Invalid Month Name
   run bash -c '
     exec 2> "$3"
-    source "$4"
+    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh")
     eval "$1"
     
     export LOG_FILE="/dev/null"
@@ -710,12 +838,12 @@ EOF
     export min_attempts="1"
     
     mode="month"
-    value="January" # Invalid name
+    value="January"
     
     extract_data "$2"
-  ' "bash" "$process_logs_override" "$tmp_ips_file" "$stderr_log" "$safe_script"
+  ' "bash" "$process_logs_override" "$tmp_ips_file" "$stderr_log"
 
-  rm "$tmp_ips_file" "$stderr_log" "$safe_script"
+  rm "$tmp_ips_file" "$stderr_log"
 
   assert_failure 2
 }
