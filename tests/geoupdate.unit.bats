@@ -5,7 +5,7 @@ load "${BATS_TEST_DIRNAME}/test_helper/bats-assert/load.bash"
 
 setup() {
   export HOME="$(mktemp -d)"
-  STUB_DIR=$(mktemp -d)
+  export STUB_DIR="$(mktemp -d)"
   export PATH="$STUB_DIR:$PATH"
 }
 
@@ -16,11 +16,38 @@ teardown() {
 
 # --- TESTS ---
 
-@test "geoupdate.unit: run_update() - with missing credentials - should fail and exit 1" {
+@test "geoupdate.unit: check_dependencies() - when all dependencies exist - should exit 0" {
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    command() { return 0; }
+    check_dependencies
+  '
+
+  assert_success
+}
+
+@test "geoupdate.unit: check_dependencies() - when a dependency is missing - should print error and exit 1" {
   run bash -c '
     source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
     
-    # Initialize globals to satisfy set -u.
+    # Mock failure specifically for "curl" to verify error handling logic.
+    command() {
+      [[ "$2" == "curl" ]] && return 1
+      return 0
+    }
+    
+    check_dependencies
+  '
+
+  assert_failure 1
+  assert_output --partial "ERROR: Required command not found: 'curl'"
+}
+
+@test "geoupdate.unit: run_update() - with missing credentials - should print error and exit 1" {
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    
+    # Initialize required globals to satisfy set -u, but leave credentials unset.
     export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     
@@ -38,6 +65,7 @@ while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "-o" ]]; then touch "\$2"; fi
   shift
 done
+exit 0
 EOF
   chmod +x "$STUB_DIR/curl"
 
@@ -47,12 +75,13 @@ exit 0
 EOF
   chmod +x "$STUB_DIR/sha256sum"
 
-  # Output safe filename to pass security validation.
+  # Return a safe filename to pass the "Tar Slip" security check.
   cat > "$STUB_DIR/tar" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == "-tf" ]]; then
   echo "GeoLite2-City.mmdb"
 fi
+exit 0
 EOF
   chmod +x "$STUB_DIR/tar"
 
@@ -68,7 +97,7 @@ EOF
     
     mkdir -p "$STATE_DIR"
     
-    # Define global tmp_dir to satisfy "set -u" during EXIT trap execution.
+    # Initialize global variable to prevent "unbound variable" error in EXIT trap.
     tmp_dir=""
     
     run_update
@@ -79,7 +108,7 @@ EOF
 }
 
 @test "geoupdate.unit: run_update() - when download fails - should exit 22" {
-  # Mock curl to simulate a specific HTTP/Network failure (code 22).
+  # Simulate a specific curl error code (22 = HTTP error).
   cat > "$STUB_DIR/curl" <<EOF
 #!/usr/bin/env bash
 exit 22
@@ -102,22 +131,22 @@ EOF
     run_update
   '
 
-  # Verify that the specific curl error code propagated through the script.
   assert_failure 22
 }
 
-@test "geoupdate.unit: run_update() - when checksum mismatches - should exit 1" {
-  # Mock curl: Must succeed and create files to reach the validation step.
+@test "geoupdate.unit: run_update() - when checksum mismatches - should print error and exit 1" {
+  # Mock curl to succeed and create dummy files so script proceeds to verification.
   cat > "$STUB_DIR/curl" <<EOF
 #!/usr/bin/env bash
 while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "-o" ]]; then touch "\$2"; fi
   shift
 done
+exit 0
 EOF
   chmod +x "$STUB_DIR/curl"
 
-  # Mock sha256sum: Fail to simulate data corruption.
+  # Mock sha256sum to fail, simulating data corruption.
   cat > "$STUB_DIR/sha256sum" <<EOF
 #!/usr/bin/env bash
 exit 1
@@ -151,6 +180,7 @@ while [[ \$# -gt 0 ]]; do
   if [[ "\$1" == "-o" ]]; then touch "\$2"; fi
   shift
 done
+exit 0
 EOF
   chmod +x "$STUB_DIR/curl"
 
@@ -190,17 +220,20 @@ EOF
   '
 
   assert_failure 1
-  assert_output --partial "Archive contains potentially unsafe file paths"
+  assert_output --partial "ERROR: Archive contains potentially unsafe file paths"
   refute_output --partial "SECURITY FAIL"
 }
 
-@test "geoupdate.unit: main() - with missing config files - should exit 1" {
-  # Run main in the clean sandbox where config files do not exist.
+@test "geoupdate.unit: main() - with missing config files - should print error and exit 1" {
   run bash -c '
     source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    
+    # Mock command check to bypass dependency validation and hit config check.
+    command() { return 0; }
+    
     main
   '
 
   assert_failure 1
-  assert_output --partial "Cannot read ufwcheck config file"
+  assert_output --partial "ERROR: Cannot read ufwcheck config file"
 }
