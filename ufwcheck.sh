@@ -15,7 +15,7 @@
 #   engine for batch processing.
 #
 # DEPENDENCIES
-#   grep, awk, sort, head, column (coreutils), jq
+#   grep, awk, sort, head, column (coreutils), jq, zcat (gzip)
 #   python3 (with python3-maxminddb library)
 #
 # USAGE
@@ -112,7 +112,7 @@ validate_positive_integer() {
 # ==============================================================================
 check_dependencies() {
   local missing_deps=0
-  for cmd in grep awk sort head column python3 jq; do
+  for cmd in grep awk sort head column python3 jq zcat; do
     if ! command -v "$cmd" &>/dev/null; then
       echo "[✘] Error: Required command not found: '$cmd'. Please install it." >&2
       ((missing_deps++))
@@ -121,6 +121,32 @@ check_dependencies() {
   if ((missing_deps > 0)); then
     exit 1
   fi
+}
+
+# ==============================================================================
+# DESCRIPTION
+#   Streams log content to STDOUT.
+#   In 'today' mode: reads only active logs (ufw.log and ufw.log.1) for speed.
+#   In other modes: reads ALL rotated archives using zcat for full history.
+#
+# GLOBAL VARIABLES
+#   LOG_FILE, mode
+# ==============================================================================
+ufw_log_stream() {
+  local log_dir
+  local log_base
+
+  log_dir=$(dirname "$LOG_FILE")
+  log_base=$(basename "$LOG_FILE")
+
+  if [[ "$mode" == "today" ]]; then
+     if [[ -f "$LOG_FILE" ]]; then cat "$LOG_FILE"; fi
+     if [[ -f "${LOG_FILE}.1" ]]; then zcat -f "${LOG_FILE}.1"; fi
+     return
+  fi
+
+  # Find order irrelevant; sorting happens downstream.
+  find "$log_dir" -maxdepth 1 -name "${log_base}*" -print0 | xargs -0 zcat -f
 }
 
 # ==============================================================================
@@ -187,8 +213,12 @@ check_environment() {
   # shellcheck source=/dev/null
   source "$UFWCHECK_CONFIG_FILE"
 
-  if [[ ! -r "$LOG_FILE" ]]; then
-      echo "[✘] Error: UFW log file not found or not readable at '$LOG_FILE'." >&2
+  local log_dir
+  log_dir=$(dirname "$LOG_FILE")
+
+  # Verify directory access before dynamic file resolution.
+  if [[ ! -d "$log_dir" || ! -r "$log_dir" || ! -x "$log_dir" ]]; then
+      echo "[✘] Error: UFW log directory not found or not readable at '$log_dir'." >&2
       exit 1
   fi
   if [[ ! -r "$MMDB_FILE" ]]; then
@@ -258,6 +288,16 @@ parse_arguments() {
         ;;
     esac
   done
+
+  if [[ "$mode" == "days" ]]; then
+    validate_positive_integer "$value" "--days"
+
+    # Limit analysis to 366 days to prevent regex performance degradation.
+    if (( value > 366 )); then
+      echo "[✘] Error: Maximum allowed value for '--days' is 366. Got: '$value'" >&2
+      exit 2
+    fi
+  fi
 }
 
 # ==============================================================================
@@ -428,7 +468,7 @@ extract_data() {
   # Disable pipefail to ignore SIGPIPE from 'head' in huge logs.
   set +o pipefail
 
-  grep -E "$final_regex" "$LOG_FILE" | \
+  ufw_log_stream | grep -E "$final_regex" | \
   process_logs "$filter_private" "$min_attempts" | \
   sort -nr | \
   "${limit_pipe[@]}" > "$tmp_ips"
@@ -484,10 +524,6 @@ main() {
   trap 'rm -f "$tmp_ips" "$tmp_out"' EXIT
 
   parse_arguments "$@"
-
-  if [[ "$mode" == "days" ]]; then
-    validate_positive_integer "$value" "--days"
-  fi
 
   if [[ -n "$top_limit" ]]; then
     validate_positive_integer "$top_limit" "--top"
