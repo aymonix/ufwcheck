@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: install.sh
 # AUTHOR: Aymon
-# DATE:   2025-12-12
-# VERSION: 1.2.0
+# DATE:   2025-12-25
+# VERSION: 1.0.0
 #
 # DESCRIPTION
 #   Automates the installation of the ufwcheck tool suite. It follows the XDG

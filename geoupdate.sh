@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: geoupdate.sh
 # AUTHOR: Aymon
-# DATE:   2025-12-12
-# VERSION: 1.2.0
+# DATE:   2025-12-25
+# VERSION: 1.0.0
 #
 # DESCRIPTION
 #   Downloads and verifies the latest GeoLite2-City.mmdb database from MaxMind.

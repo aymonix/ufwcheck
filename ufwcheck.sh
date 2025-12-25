@@ -2,8 +2,8 @@
 # ==============================================================================
 # SCRIPT: ufwcheck.sh
 # AUTHOR: Aymon
-# DATE:   2025-12-12
-# VERSION: 1.2.0
+# DATE:   2025-12-25
+# VERSION: 1.0.0
 #
 # DESCRIPTION
 #   Analyzes UFW (Uncomplicated Firewall) logs to identify and report on IP
