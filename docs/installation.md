@@ -9,15 +9,17 @@ Before you begin, you need to ensure your system is ready.
 ### Required Tools
 While most standard utilities (`grep`, `sort`, etc.) are pre-installed, you must ensure the following are present:
 *   `curl` for downloading.
+*   `python3` (usually pre-installed).
+*   **`python3-maxminddb`**: Python library for fast GeoIP lookups.
+*   **`zcat`**: Provided by the `gzip` package (for reading compressed logs).
 *   `column` usually in the `util-linux` package.
 *   `jq` for JSON processing.
 *   `cron` if you plan to use automated updates.
 *   **`sha256sum`**: For verifying script integrity. Part of the `coreutils` package.
-*   **`mmdblookup`**: This is the core utility for reading the GeoIP database. It is **not** installed by default and is typically provided by the `mmdb-bin` package.
 
 On Debian/Ubuntu, you can install all of them with:
 ```bash
-sudo apt-get update && sudo apt-get install curl util-linux jq cron mmdb-bin
+sudo apt-get update && sudo apt-get install curl python3 python3-maxminddb gzip util-linux jq cron coreutils
 ```
 
 ### Required Data: MaxMind Account & GeoIP Database
@@ -145,9 +147,53 @@ alias ufwcheck='ufwcheck.sh'
 alias geoupdate='geoupdate.sh'
 ```
 
-## Step 6: Final Steps
+## Step 6: Configure Log Retention (Optional)
+
+To utilize the deep history analysis features of `ufwcheck` (extending back months or a year), you must adjust the system's log rotation settings.
 
 &nbsp;
+**A. Open the Configuration:**
+
+Open the `logrotate` configuration file for UFW:
+```bash
+sudo nano /etc/logrotate.d/ufw
+```
+
+&nbsp;
+**B. Modify Retention Settings:**
+
+Locate the line starting with `rotate` (usually `rotate 4`). Change its value based on your desired retention period:
+
+*   **`rotate 13`**: ~3 months.
+*   **`rotate 26`**: ~6 months.
+*   **`rotate 52`**: ~1 year.
+
+Note that the `postrotate` section contains default system-specific commands. It is recommended to keep these defaults unchanged while adjusting the retention settings.
+
+**Example of a modified configuration (set for 1 year):**
+```text
+/var/log/ufw.log
+{
+        rotate 52
+        weekly
+        missingok
+        notifempty
+        compress
+        delaycompress
+        sharedscripts
+        postrotate
+                # System-specific reload command (leave unchanged)...
+        endscript
+}
+```
+
+&nbsp;
+**C. Save and Apply:**
+
+Save the file and exit the editor. The changes will take effect automatically during the next scheduled system rotation.
+
+## Step 7: Final Steps
+
 **A. Activate the Environment:**
 
 Add the following line to your `~/.bashrc` or `~/.zshrc`:

@@ -1,12 +1,15 @@
 # ufwcheck
 
-**ufwcheck** is a suite of `bash` utilities for analyzing UFW (Uncomplicated Firewall) logs, designed for Debian and Ubuntu environments. It helps identify IP addresses exhibiting suspicious activity, enriches them with geolocation data, and presents the findings in clear, ranked reports.
+**ufwcheck** is a suite of `bash` utilities for analyzing UFW (Uncomplicated Firewall) logs, designed for Debian and Ubuntu environments. It helps identify IP addresses exhibiting suspicious activity by scanning both real-time logs and historical archives, enriches them with geolocation data, and presents the findings in clear, ranked reports.
 
 ## Features
 
 #### Core Functionality
 *   ⚡ **Fast Log Analysis**: Finds and aggregates all `UFW BLOCK` events.
 *   🌍 **IP Geolocation**: Automatically determines the country and city for each IP.
+*   🕰️ **Deep History Analysis**: The Omni-Reader architecture seamlessly reads compressed and rotated logs (`.gz`), enabling analysis of long-term trends.
+*   🌀 **Rotation Agnostic**: Works correctly regardless of your system's log rotation strategy (daily, weekly, or monthly).
+*   🚀 **Smart Optimization**: Automatically detects the query scope to read only necessary files, ensuring instant results for daily reports.
 *   🔍 **Flexible Filtering**: Analyze logs for today, a specific date, the last N days, or a specific month.
 *   📋 **Customizable Reporting**: Allows limiting the output to the top N most active IPs or filtering by the minimum number of blocked attempts.
 
@@ -20,9 +23,11 @@
 
 The `install.sh` script will automatically check for all required utilities. For it to run, you will need:
 *   `curl`
-*   `mmdblookup` from the `mmdb-bin` package
+*   `python3` (usually pre-installed)
+*   `python3-maxminddb` library (for fast GeoIP lookups)
+*   `zcat` (provided by the standard `gzip` package)
 *   `column` from the `util-linux` package
-*   `jq`
+*   `jq` for JSON processing
 *   `sha256sum` from the `coreutils` package
 *   `cron` for optional automatic updates
 
@@ -40,7 +45,7 @@ We provide an automated installer script to make setup as quick and easy as poss
 2.  **Verify Installer Integrity**
     To ensure the installer is authentic, verify its SHA256 checksum. The command should output `install.sh: OK`.
     ```bash
-    echo "6313cfe31493d9808a83817d57b3d0ed5a07307d191ea7f8ee9d263ad81f0166  install.sh" | sha256sum -c -
+    echo "f431658816cc63bf08e1cc26c05898d045f3ec03a83e0b6b8c7d95bc6861d8c1  install.sh" | sha256sum -c -
     ```
 
 3.  **Make it executable:**
@@ -117,7 +122,30 @@ ufwcheck -d 7 -a 5 -t 20
 *Get a report for July, top 30, with over 100 blocked attempts, in JSON format, and save to a file:*
 ```bash
 ufwcheck -m Jul -t 30 -a 100 --json > report.json
-```	
+```
+
+## Log Rotation & Retention
+
+`ufwcheck` is Rotation-Agnostic. Whether your system rotates logs daily, weekly, or monthly, the Omni-Reader engine will correctly identify and process the entire history chain.
+
+By default, Debian and Ubuntu systems rotate UFW logs weekly and retain only 4 archives. This provides approximately **28 days** of history. However, `ufwcheck` is capable of analyzing up to **1 year** of data to detect persistent low-frequency attacks.
+
+> [!NOTE]
+> **Limits:** The tool enforces a hard limit of 366 days for the `--days` flag. This duration represents the optimal operating range for efficient text-based log analysis, balancing deep historical insight with query performance.
+
+#### Storage & Performance Impact (1 Year History)
+The following estimates are based on typical server activity profiles when analyzing a full year of logs (`--days 366`).
+
+| Server Profile | Activity Level | Storage (Year) | Analysis Time | RAM Usage |
+| :--- | :--- | :--- | :--- | :--- |
+| **Personal / Dev** | Low noise, port scanners. | ~75 MB | ~25 sec | < 20 MB |
+| **Small Business** | Public web server, constant bots. | ~350 MB | ~1 - 3 min | ~50 MB |
+| **High Exposure** | Popular service, aggressive attacks. | ~3 GB | ~10 - 20 min | ~150 MB |
+
+Performance depends on your CPU speed. Analysis is optimized to stream data, ensuring minimal memory footprint even on low-end VPS.
+
+#### Configuration
+For detailed instructions on how to configure `logrotate` to store 1 year of history, please refer to **Step 6** in the **[Manual Installation Guide](docs/installation.md#step-6-configure-log-retention-optional)**.
 
 ## Output Format
 
@@ -207,16 +235,12 @@ We welcome any contributions to the `ufwcheck` project! If you have ideas for im
 
 ## Changelog
 
-**v1.1.0** (2025-09-26)
-*   🚀 **Performance**: Optimized GeoIP lookups using a batch process.
-*   ✨ **Code**: Refactored the log processing pipeline for clarity.
-*   🔒 **Security**: The installer now verifies downloaded scripts using SHA256 checksums.
-
-**v1.0.0** (2025-08-06)
-*   🎉 Initial release of `ufwcheck`.
-*   ⚙️ Added the smart installer `install.sh`.
-*   ✨ Implemented `ufwcheck` with flexible filters and JSON output.
-*   🔄 Added `geoupdate` for automatic GeoIP database updates.
+**v1.0.0** (2025-12-25)
+*   🎉 **Initial Public Release**: Comprehensive launch of the `ufwcheck` suite.
+*   🚀 **Core Architecture**: Features Omni-Reader logic for transparent analysis of current, rotated, and compressed logs.
+*   ⚡ **Performance**: Powered by an embedded Python engine for high-speed IP batch processing.
+*   ⚙️ **Ecosystem**: Includes smart installer (`install.sh`) and auto-updater (`geoupdate.sh`).
+*   🛡️ **Security**: Built with strict permission checks, input sanitization, and SHA256 integrity verification.
 
 ## Uninstall
 

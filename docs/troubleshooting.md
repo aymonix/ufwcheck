@@ -18,28 +18,32 @@
 
 ## ufwcheck Errors
 
-*   **Error:** `[✘] Error: Required command not found: 'jq'. Please install it.`
-    *   **Cause:** A required utility (e.g., `jq`) is missing from the system.
+*   **Error:** `[✘] Error: Required command not found: '...'. Please install it.`
+    *   **Cause:** A required system utility is missing from your environment.
     *   **Solution:** Install the missing package. For Debian/Ubuntu, the package list is in the **[Prerequisites](../README.md#prerequisites)** section.
 
 *   **Error:** `[✘] Error: Configuration file not found at '~/.config/ufwcheck/config.sh'`
     *   **Cause:** The main configuration file is missing or in the wrong location.
     *   **Solution:** Ensure the installation was successful. If you performed a manual installation, create this file at the specified path.
 
-*   **Error:** `[✘] Error: UFW log file not found or not readable...`
+*   **Error:** `[✘] Error: UFW log directory not found or not readable...`
     *   **Cause:** The path to the UFW log is incorrect, or your user lacks permission to read it.
     *   **Solution:** Check the `LOG_FILE` path in your config. The system log `/var/log/ufw.log` often requires administrator privileges (`root`) or membership in the `adm` group. Ensure your user is in the `adm` group (`sudo usermod -aG adm $USER`) or consult your system administrator.
 
 *   **Error:** `[✘] Error: GeoIP database not found or not readable...`
-    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet.
+    *   **Cause:** The `GeoLite2-City.mmdb` database has not been downloaded yet or the path is incorrect.
     *   **Solution:**
         *   **If using automated management:** Run `geoupdate.sh` to download the database.
         *   **If using manual placement:** Ensure your `.mmdb` file is located at the path specified in the `MMDB_FILE` variable in your configuration.
 
+*   **Error:** `[✘] Error: Maximum allowed value for '--days' is 366. Got: '...'`
+    *   **Cause:** The provided value exceeds the maximum supported history depth.
+    *   **Solution:** Provide a value less than or equal to 366.
+
 *   **Error:** `[✘] Error: The value for '...' must be a positive integer...`
     *   **Cause:** You provided a non-numeric or negative value to an option (`--top`, `--days`, `--attempts`).
     *   **Solution:** Use only positive integers (e.g., `1`, `10`, `100`).
-
+	
 *   **Error:** `[✘] Error: Invalid month abbreviation...` or `...Date must be in YYYY-MM-DD format...`
     *   **Cause:** The date or month format is incorrect.
     *   **Solution:** Use three-letter English abbreviations (`Jan`, `Feb`, etc.) for the month or the `YYYY-MM-DD` format for the date.
