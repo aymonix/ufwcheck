@@ -1,36 +1,31 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # SCRIPT: install.sh
-# AUTHOR: Aymon
-# DATE:   2025-12-25
-# VERSION: 1.0.0
+# VERSION: 1.0.1
 #
-# DESCRIPTION
+# Description:
 #   Automates the installation of the ufwcheck tool suite. It follows the XDG
 #   Base Directory Specification to keep the user's home directory clean.
 #   The script operates with user permissions and does not require sudo,
 #   except for prompting the user to install missing system dependencies.
 #
-# DEPENDENCIES
-#   curl, python3, python3-maxminddb, column, jq, sha256sum, crontab
+# Dependencies:
+#   curl, python3, python3-maxminddb, column, jq, crontab
 #
-# INSTALLATION STEPS
+# Installation Steps:
 #   1. Checks for required command-line tools and Python libraries.
-#   2. Creates necessary directories and configuration, then downloads and verifies
-#      the core scripts (ufwcheck.sh, geoupdate.sh).
+#   2. Creates necessary directories and configuration, then downloads
+#      the core scripts (ufwcheck, geoupdate).
 #   3. Interactively configures MaxMind API credentials.
 #   4. Sets up a shell environment file for easy command access.
 #   5. Optionally configures a cron job for automatic database updates.
 #   6. Displays the final manual step required to complete the installation.
-#
-# USAGE
-#   ./install.sh
 # ==============================================================================
 
 set -euo pipefail
 
 # ==============================================================================
-# GLOBAL VARIABLES & CONSTANTS
+# GLOBALS & CONSTANTS
 # ==============================================================================
 
 # Color definitions (ANSI 8/16 colors).
@@ -54,61 +49,53 @@ readonly GITHUB_REPO="ufwcheck"
 readonly GITHUB_BRANCH="main"
 
 # Project Paths.
-readonly UFWCHECK_CONFIG_DIR="${HOME}/.config/ufwcheck"
-readonly MAXMIND_CONFIG_DIR="${HOME}/.config/maxmind"
-readonly GEOIP_DATA_DIR="${HOME}/.local/share/geoip"
+readonly UFWCHECK_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ufwcheck"
+readonly MAXMIND_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/maxmind"
+readonly GEOIP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/geoip"
 readonly BIN_DIR="${HOME}/.local/bin"
-readonly STATE_DIR="${HOME}/.local/state"
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
 
 # Project Files.
-readonly UFWCHECK_SCRIPT_PATH="${BIN_DIR}/ufwcheck.sh"
-readonly GEOUPDATE_SCRIPT_PATH="${BIN_DIR}/geoupdate.sh"
-readonly SHA_SUM_PATH="${BIN_DIR}/SHA256SUMS"
+readonly UFWCHECK_SCRIPT_PATH="${BIN_DIR}/ufwcheck"
+readonly GEOUPDATE_SCRIPT_PATH="${BIN_DIR}/geoupdate"
 readonly MAXMIND_SECRETS_FILE="${MAXMIND_CONFIG_DIR}/secrets"
-readonly MAXMIND_CONFIG_FILE="${MAXMIND_CONFIG_DIR}/config.sh"
-readonly UFWCHECK_CONFIG_FILE="${UFWCHECK_CONFIG_DIR}/config.sh"
-readonly UFWCHECK_ENV_FILE="${UFWCHECK_CONFIG_DIR}/env.sh"
+readonly MAXMIND_CONFIG_FILE="${MAXMIND_CONFIG_DIR}/config"
+readonly UFWCHECK_CONFIG_FILE="${UFWCHECK_CONFIG_DIR}/config"
+readonly UFWCHECK_ENV_FILE="${UFWCHECK_CONFIG_DIR}/env"
 
 # ==============================================================================
 # FUNCTIONS
 # ==============================================================================
 
 # ==============================================================================
-# DESCRIPTION
-#   Prints a formatted header message to the console.
+# Description:
+#   Prints a formatted section header to the console.
 #
-# ARGUMENTS
-#   $1 - The text to display in the header.
-#
-# GLOBAL VARIABLES
-#   THEME_HEADER, THEME_RESET
+# Args:
+#   $1 - The header text to display.
 # ==============================================================================
 print_header() {
   echo -e "\n${THEME_HEADER}--- $1 ---${THEME_RESET}"
 }
 
 # ==============================================================================
-# DESCRIPTION
+# Description:
 #   Checks if a command exists in the system's PATH.
 #
-# ARGUMENTS
-#   $1 - The name of the command to check.
+# Args:
+#   $1 - The command name to check.
 #
-# RETURNS
-#   0 if the command exists, 1 otherwise.
+# Returns:
+#   0 if found, 1 otherwise.
 # ==============================================================================
 command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Checks for required system dependencies, including Python 3 and the
-#   MaxMindDB library. If any are missing, it provides the user with a command
-#   to install them and returns an error code.
-#
-# GLOBAL VARIABLES
-#   THEME_WARN, THEME_SUCCESS, THEME_INFO, THEME_RESET, C_BOLD
+# Description:
+#   Checks for all required system dependencies including the python3-maxminddb
+#   library. If anything is missing, prints the install command and exits.
 # ==============================================================================
 check_dependencies() {
   print_header "Welcome to the ufwcheck Installer"
@@ -119,21 +106,20 @@ check_dependencies() {
   declare -A CMD_TO_PKG=(
     [curl]="curl"
     [python3]="python3"
-    [column]="util-linux"
+    [column]="bsdextrautils"
     [crontab]="cron"
     [jq]="jq"
-    [sha256sum]="coreutils"
   )
 
   local missing_pkgs=()
-  local all_deps_found=true
+  local all_deps_found="true"
 
   # 1. Check binary tools
   for cmd in "${!CMD_TO_PKG[@]}"; do
     if ! command_exists "$cmd"; then
-      all_deps_found=false
+      all_deps_found="false"
       echo -e "Checking for '${cmd}'... ${THEME_WARN}Not found.${THEME_RESET} (package: ${CMD_TO_PKG[$cmd]})"
-      if [[ ! " ${missing_pkgs[*]} " =~ " ${CMD_TO_PKG[$cmd]} " ]]; then
+      if ! printf '%s\n' "${missing_pkgs[@]}" | grep -qx "${CMD_TO_PKG[$cmd]}"; then
         missing_pkgs+=("${CMD_TO_PKG[$cmd]}")
       fi
     else
@@ -148,7 +134,7 @@ check_dependencies() {
       echo -e "${THEME_SUCCESS}Found.${THEME_RESET}"
     else
       echo -e "${THEME_WARN}Not found.${THEME_RESET}"
-      all_deps_found=false
+      all_deps_found="false"
       # Check if package is already in list to avoid duplicates
       if [[ ! " ${missing_pkgs[*]} " =~ " python3-maxminddb " ]]; then
         missing_pkgs+=("python3-maxminddb")
@@ -156,10 +142,10 @@ check_dependencies() {
     fi
   fi
 
-  if ! $all_deps_found; then
+  if [[ "$all_deps_found" == "false" ]]; then
     echo -e "\n${C_BOLD}${THEME_WARN}ACTION REQUIRED: One or more dependencies are missing.${THEME_RESET}"
     echo "To install the required packages for Debian/Ubuntu, please run:"
-    echo -e "  ${THEME_INFO}sudo apt-get update && sudo apt-get install ${missing_pkgs[*]}${THEME_RESET}"
+    echo -e "  ${THEME_INFO}sudo apt update && sudo apt install -y ${missing_pkgs[*]}${THEME_RESET}"
     echo "After installation, please run this script again."
     return 1
   fi
@@ -167,40 +153,36 @@ check_dependencies() {
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Interactively configures MaxMind API credentials, giving the user the
-#   choice between automatic setup and manual configuration. It creates both
-#   the 'secrets' file and the configuration loader.
+# Description:
+#   Interactively configures MaxMind API credentials. Offers a choice between
+#   guided setup and manual configuration. Creates both the secrets file and
+#   the configuration loader.
 #
-# GLOBAL VARIABLES
+# Globals:
 #   MAXMIND_CONFIG_DIR, MAXMIND_SECRETS_FILE, MAXMIND_CONFIG_FILE
-#   THEME_WARN, THEME_SUCCESS, THEME_INFO, THEME_RESET
 # ==============================================================================
 configure_maxmind() {
   print_header "MaxMind API Configuration"
   echo "The update script requires a MaxMind Account ID and License Key."
 
   local choice
-  read -p "How would you like to configure access? [1] Interactive (Recommended) [2] Manual: " choice
+  read -r -p "How would you like to configure access? [1] Interactive (Recommended) [2] Manual: " choice
   choice=${choice:-1}
 
   case "$choice" in
     1)
       echo "Entering interactive setup..."
       local maxmind_id maxmind_token
-      read -p "Please enter your MaxMind Account ID: " maxmind_id
-      read -s -p "Please enter your MaxMind License Key: " maxmind_token
+      read -r -p "Please enter your MaxMind Account ID: " maxmind_id
+      read -r -s -p "Please enter your MaxMind License Key: " maxmind_token || true
       echo
 
       if [[ -z "$maxmind_id" || -z "$maxmind_token" ]]; then
         echo -e "${THEME_WARN}WARN: Input was empty. Skipping API setup. Please configure manually later.${THEME_RESET}"
       else
         mkdir -p "$MAXMIND_CONFIG_DIR"
-        cat > "$MAXMIND_SECRETS_FILE" <<EOF
-# MaxMind Credentials (permissions: 600)
-export MAXMIND_ID="$maxmind_id"
-export MAXMIND_TOKEN="$maxmind_token"
-EOF
+        printf '# MaxMind Credentials (permissions: 600)\nexport MAXMIND_ID="%s"\nexport MAXMIND_TOKEN="%s"\n' \
+          "$maxmind_id" "$maxmind_token" > "$MAXMIND_SECRETS_FILE"
         chmod 600 "$MAXMIND_SECRETS_FILE"
         echo -e "${THEME_SUCCESS}Successfully created and secured ${MAXMIND_SECRETS_FILE}.${THEME_RESET}"
       fi
@@ -222,29 +204,37 @@ EOF
   # Create the configuration loader for MaxMind tools.
   mkdir -p "$MAXMIND_CONFIG_DIR"
   cat > "$MAXMIND_CONFIG_FILE" << EOF
-#!/usr/bin/env bash
-# === Config for MaxMind ===
+# ==============================================================================
+# MaxMind configuration
+# Location: ${MAXMIND_CONFIG_FILE}
+# Description: Sources credentials and defines GeoLite2-City download URLs.
+# ==============================================================================
 
-# This file sources credentials from a separate, private file.
-source "$MAXMIND_SECRETS_FILE"
+# Abort if secrets file is not readable
+if [[ ! -r "${MAXMIND_SECRETS_FILE}" ]]; then
+    echo "Error: MaxMind secrets not found at ${MAXMIND_SECRETS_FILE}" >&2
+    exit 1
+fi
 
-# Public URLs for GeoLite2-City database downloads
-export DOWNLOAD_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
-export SHA_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz.sha256"
+# Authentication credentials
+source "${MAXMIND_SECRETS_FILE}"
+
+# GeoLite2-City download URLs
+DOWNLOAD_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
+SHA_URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz.sha256"
 EOF
   echo "MaxMind configuration loader created at ${MAXMIND_CONFIG_FILE}."
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Creates XDG-compliant directories, downloads scripts, verifies integrity,
-#   and creates the default ufwcheck configuration.
+# Description:
+#   Creates XDG-compliant directories, generates the default ufwcheck config,
+#   downloads scripts from GitHub, and sets executable permissions.
 #
-# GLOBAL VARIABLES
+# Globals:
 #   BIN_DIR, GEOIP_DATA_DIR, STATE_DIR, UFWCHECK_CONFIG_DIR
 #   UFWCHECK_CONFIG_FILE, UFWCHECK_SCRIPT_PATH, GEOUPDATE_SCRIPT_PATH
-#   SHA_SUM_PATH, GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH
-#   THEME_SUCCESS, THEME_WARN, THEME_RESET
+#   GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH
 # ==============================================================================
 install_files() {
   print_header "Installing Scripts and Configuration"
@@ -254,45 +244,33 @@ install_files() {
 
   echo "Creating default configuration file for ufwcheck..."
   cat > "$UFWCHECK_CONFIG_FILE" << EOF
-#!/usr/bin/env bash
-# === Config for ufwcheck ===
+# ==============================================================================
+# ufwcheck configuration
+# Location: ${UFWCHECK_CONFIG_FILE}
+# Description: Defines log paths, GeoIP database, and state directory.
+# ==============================================================================
 
-# Path to the UFW log file.
+# UFW log file
 LOG_FILE="/var/log/ufw.log"
 
-# Path to the GeoIP database.
+# GeoIP database file
 MMDB_FILE="${GEOIP_DATA_DIR}/GeoLite2-City.mmdb"
 
-# Directory for state files (temporary files and report log).
+# Directory for temporary and state files
 STATE_DIR="${STATE_DIR}"
 
-# Path to the report log file.
-OUTPUT_LOG="$STATE_DIR/ufwcheck.log"
+# Report log file
+OUTPUT_LOG="${STATE_DIR}/ufwcheck.log"
 EOF
   echo -e "${THEME_SUCCESS}Successfully created ${UFWCHECK_CONFIG_FILE}.${THEME_RESET}"
 
   local base_url="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
-  local ufwcheck_url="${base_url}/ufwcheck.sh"
-  local geoupdate_url="${base_url}/geoupdate.sh"
-  local sha_url="${base_url}/SHA256SUMS"
+  local ufwcheck_url="${base_url}/ufwcheck"
+  local geoupdate_url="${base_url}/geoupdate"
 
-  echo "Downloading main scripts and checksum file..."
+  echo "Downloading main scripts..."
   curl -Lfs "$ufwcheck_url" -o "$UFWCHECK_SCRIPT_PATH"
   curl -Lfs "$geoupdate_url" -o "$GEOUPDATE_SCRIPT_PATH"
-  curl -Lfs "$sha_url" -o "$SHA_SUM_PATH"
-
-  echo "Verifying script integrity..."
-  if ! (cd "$BIN_DIR" && sha256sum -c --ignore-missing --status SHA256SUMS); then
-    echo -e "${THEME_WARN}ERROR: Checksum mismatch! The downloaded scripts may be compromised.${THEME_RESET}" >&2
-    echo "Aborting installation to ensure system safety." >&2
-    
-    # Clean up potentially compromised or incomplete files.
-    rm -f "$UFWCHECK_SCRIPT_PATH" "$GEOUPDATE_SCRIPT_PATH" "$SHA_SUM_PATH"
-    return 1
-  fi
-  
-  rm -f "$SHA_SUM_PATH"
-  echo -e "${THEME_SUCCESS}Scripts verified successfully.${THEME_RESET}"
 
   echo "Setting executable permissions..."
   chmod +x "$UFWCHECK_SCRIPT_PATH" "$GEOUPDATE_SCRIPT_PATH"
@@ -300,48 +278,51 @@ EOF
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Creates the shell environment file with PATH adjustments and aliases.
+# Description:
+#   Creates the shell environment file with PATH adjustments and aliases
+#   for ufwcheck and geoupdate commands.
 #
-# GLOBAL VARIABLES
+# Globals:
 #   UFWCHECK_ENV_FILE, BIN_DIR
 # ==============================================================================
 setup_environment() {
   print_header "Setting up Shell Environment"
 
   cat > "$UFWCHECK_ENV_FILE" << EOF
-#!/usr/bin/env bash
-# === Environment settings for ufwcheck ===
-# This file is sourced by your shell profile (e.g., .bashrc).
+# ==============================================================================
+# ufwcheck Environment Settings
+# Location: ${UFWCHECK_ENV_FILE}
+# Description: The file is sourced from the shell profile (e.g., .bashrc).
+# ==============================================================================
 
 # Add the user's local binary directory to the PATH.
 export PATH="${BIN_DIR}:\$PATH"
 
-# Convenient aliases.
-alias ufwcheck='ufwcheck.sh'
-alias geoupdate='geoupdate.sh'
+# Aliases.
+alias ufc='ufwcheck'
+alias gup='geoupdate'
 EOF
   echo "Environment file created at ${UFWCHECK_ENV_FILE}."
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Interactively offers to set up a weekly cron job for database updates.
+# Description:
+#   Interactively offers to configure a weekly cron job for automatic
+#   GeoLite2-City database updates.
 #
-# GLOBAL VARIABLES
+# Globals:
 #   GEOUPDATE_SCRIPT_PATH
-#   THEME_SUCCESS, THEME_INFO, THEME_RESET
 # ==============================================================================
 configure_cron() {
   print_header "Automatic Database Updates (Optional)"
 
   local choice
-  read -p "Set up a weekly cron job to update the GeoLite2-City database? [y/N]: " choice
+  read -r -p "Set up a weekly cron job to update the GeoLite2-City database? [y/N]: " choice
 
   if [[ "$choice" =~ ^[Yy]$ ]]; then
     local cron_job="0 3 * * 6 ${GEOUPDATE_SCRIPT_PATH} >/dev/null 2>&1"
     # Safely add the cron job without overwriting existing ones.
-    (crontab -l 2>/dev/null | grep -Fv "geoupdate.sh"; echo "$cron_job") | crontab -
+    (crontab -l 2>/dev/null | grep -Fv "${GEOUPDATE_SCRIPT_PATH}"; echo "$cron_job") | crontab -
     echo -e "${THEME_SUCCESS}Cron job successfully added.${THEME_RESET}"
   else
     echo "Skipping cron job setup."
@@ -352,12 +333,11 @@ configure_cron() {
 }
 
 # ==============================================================================
-# DESCRIPTION
-#   Prints the final, mandatory manual steps for the user to complete.
+# Description:
+#   Prints the final manual step required to complete the installation.
 #
-# GLOBAL VARIABLES
+# Globals:
 #   UFWCHECK_ENV_FILE
-#   THEME_CMD, C_BOLD, THEME_RESET
 # ==============================================================================
 final_instructions() {
   print_header "Installation Complete!"
@@ -366,13 +346,19 @@ final_instructions() {
   echo -e "\n  ${THEME_CMD}source \"${UFWCHECK_ENV_FILE}\"${THEME_RESET}\n"
   echo "After adding the line, restart your terminal or run 'source ~/.bashrc' to apply the changes."
   echo "You can then download the GeoLite2-City database for the first time by running:"
-  echo -e "  ${THEME_CMD}geoupdate.sh${THEME_RESET}"
+  echo -e "  ${THEME_CMD}geoupdate${THEME_RESET}"
 }
 
 # ==============================================================================
-# MAIN EXECUTION
+# Description:
+#   Main entry point. Runs all installation steps in sequence.
 # ==============================================================================
 main() {
+  if [[ -f "${UFWCHECK_CONFIG_FILE}" ]]; then
+    echo -e "${THEME_WARN}Existing installation detected.${THEME_RESET}"
+    read -r -p "Proceed with reinstall? This will overwrite all config files. [y/N]: " choice
+    [[ "$choice" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+  fi
   check_dependencies
   install_files
   configure_maxmind
@@ -381,7 +367,10 @@ main() {
   final_instructions
 }
 
-# Guard to allow sourcing the script for testing without execution.
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
