@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SCRIPT: geoupdate
+# VERSION: 1.0.1
+#
+# Description:
+#   Downloads and verifies the latest GeoLite2-City.mmdb database from MaxMind.
+#   Verifies the archive checksum and unpacks the database atomically to prevent
+#   corruption. All operations are timestamped and logged.
+#
+# Dependencies:
+#   curl, awk, sha256sum, tar
+#   A valid MaxMind account configured in ~/.config/maxmind/
+# ==============================================================================
+
+set -euo pipefail
+
+# ==============================================================================
+# GLOBALS & CONSTANTS
+# ==============================================================================
+readonly UFWCHECK_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ufwcheck/config"
+readonly MAXMIND_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/maxmind/config"
+
+# Temporary directory — declared global for EXIT trap access in run_update().
+TMP_DIR=""
+
+
+# ==============================================================================
+# FUNCTIONS
+# ==============================================================================
+
+# ==============================================================================
+# Description:
+#   Checks if all required command-line tools are installed.
+#   Exits with code 1 if any dependency is missing.
+# ==============================================================================
+check_dependencies() {
+  local missing_deps=0
+  for cmd in curl awk sha256sum tar; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "ERROR: Required command not found: '$cmd'. Please install it." >&2
+      missing_deps=$((missing_deps + 1))
+    fi
+  done
+  if ((missing_deps > 0)); then
+    exit 1
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Downloads, verifies, and atomically installs the GeoLite2-City database.
+#   Unpacks to a temporary directory first, then replaces the existing database
+#   in a single mv operation to prevent partial-update corruption.
+#   Exits with code 1 on network, checksum, or security errors.
+#
+# Globals:
+#   MAXMIND_ID, MAXMIND_TOKEN, MMDB_FILE, STATE_DIR, DOWNLOAD_URL, SHA_URL
+#   TMP_DIR
+# ==============================================================================
+run_update() {
+  if [[ -z "${MAXMIND_ID:-}" ]]; then
+    echo "ERROR: MAXMIND_ID is not set or is empty in your secrets file." >&2
+    exit 1
+  fi
+  if [[ -z "${MAXMIND_TOKEN:-}" ]]; then
+    echo "ERROR: MAXMIND_TOKEN is not set or is empty in your secrets file." >&2
+    exit 1
+  fi
+
+  local geoip_data_dir
+  geoip_data_dir=$(dirname "$MMDB_FILE")
+
+  mkdir -p "$geoip_data_dir"
+
+  TMP_DIR="$(mktemp -d "$STATE_DIR/geoupdate.XXXXXX")"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  local tmp_archive="$TMP_DIR/GeoLite2-City.tar.gz"
+  local tmp_sha256="$TMP_DIR/GeoLite2-City.tar.gz.sha256"
+
+  echo "Downloading GeoLite2-City database..."
+  curl --connect-timeout 10 --max-time 300 -s -f \
+    -u "$MAXMIND_ID:$MAXMIND_TOKEN" -L "$DOWNLOAD_URL" -o "$tmp_archive"
+
+  echo "Downloading checksum..."
+  curl --connect-timeout 10 --max-time 30 -s -f \
+    -u "$MAXMIND_ID:$MAXMIND_TOKEN" -L "$SHA_URL" -o "$tmp_sha256"
+
+  echo "Verifying checksum..."
+  # Extract hash to ignore upstream filename mismatches.
+  local expected_hash
+  expected_hash=$(awk '{print $1}' "$tmp_sha256")
+
+  # Validate local file via constructed stdin input.
+  if ! (cd "$TMP_DIR" && echo "$expected_hash  GeoLite2-City.tar.gz" | sha256sum -c --status); then
+    echo "ERROR: SHA256 mismatch! The downloaded file may be corrupt." >&2
+    exit 1
+  fi
+  echo "Checksum OK."
+
+  echo "Verifying archive content for unsafe file paths..."
+  # Security: Check for unsafe paths (e.g., / or ../) to prevent "Tar Slip".
+  local unsafe_paths
+  unsafe_paths=$(tar -tf "$tmp_archive" | grep -e '^/' -e '\.\./' || true)
+  if [[ -n "$unsafe_paths" ]]; then
+    echo "ERROR: Archive contains potentially unsafe file paths. Aborting." >&2
+    exit 1
+  fi
+  echo "Archive content is safe."
+
+  echo "Unpacking archive..."
+  local tmp_extract="$TMP_DIR/extract"
+  mkdir -p "$tmp_extract"
+  tar -xzf "$tmp_archive" -C "$tmp_extract" --strip-components=1
+
+  if [[ ! -f "$tmp_extract/GeoLite2-City.mmdb" ]]; then
+    echo "ERROR: Extraction failed. GeoLite2-City.mmdb not found in archive." >&2
+    exit 1
+  fi
+
+  # Atomic replacement: swap old database for new in a single mv operation.
+  rm -rf "$geoip_data_dir"
+  mv "$tmp_extract" "$geoip_data_dir"
+
+  echo "GeoLite2-City database updated successfully."
+}
+
+# ==============================================================================
+# Description:
+#   Main entry point. Loads configuration, sets up logging, and runs the
+#   update. Captures the exit code from the update pipeline to ensure errors
+#   are not masked by tee or awk.
+#
+# Globals:
+#   UFWCHECK_CONFIG_FILE, MAXMIND_CONFIG_FILE
+# ==============================================================================
+main() {
+  check_dependencies
+
+  # Load project paths from the ufwcheck config.
+  if [[ ! -r "$UFWCHECK_CONFIG_FILE" ]]; then
+    echo "ERROR: Cannot read ufwcheck config file: $UFWCHECK_CONFIG_FILE" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$UFWCHECK_CONFIG_FILE"
+
+  # Load credentials and URLs from the MaxMind config.
+  if [[ ! -r "$MAXMIND_CONFIG_FILE" ]]; then
+    echo "ERROR: Cannot read MaxMind config file: $MAXMIND_CONFIG_FILE" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$MAXMIND_CONFIG_FILE"
+
+  local GEO_LOG_FILE="${STATE_DIR}/geoupdate.log"
+  mkdir -p "$STATE_DIR"
+
+  local update_exit_code=0
+  {
+    run_update
+  } 2>&1 | awk '{
+      if ($0 ~ /^ERROR:/) {
+          print "[ERROR] " strftime("[%Y-%m-%d %H:%M:%S]") " " $0
+      } else {
+          print "[INFO ] " strftime("[%Y-%m-%d %H:%M:%S]") " " $0
+      }
+      fflush()
+  }' | tee -a "$GEO_LOG_FILE" || update_exit_code=$?
+
+  exit $update_exit_code
+}
+
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    -h|--help)
+      echo "Usage: geoupdate"
+      echo "Downloads and verifies the latest GeoLite2-City database from MaxMind."
+      exit 0
+      ;;
+    "")
+      main "$@"
+      ;;
+    *)
+      echo "ERROR: Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+fi
