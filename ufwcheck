@@ -1,0 +1,566 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SCRIPT: ufwcheck
+# VERSION: 1.0.1
+#
+# Description:
+#   Analyzes UFW (Uncomplicated Firewall) logs to identify and report on IP
+#   addresses with multiple block events. Offers flexible filtering by date,
+#   excludes private networks, and outputs results as a formatted table or JSON.
+#
+#   Geo-location data (country, city) is enriched using an embedded Python 3
+#   engine for batch processing.
+#
+# Dependencies:
+#   grep, awk, sort, head, column (bsdextrautils), jq, zcat (gzip)
+#   python3 (with python3-maxminddb library)
+# ==============================================================================
+
+set -euo pipefail
+
+# ==============================================================================
+# GLOBALS & CONSTANTS
+# ==============================================================================
+CMD_NAME=$(basename "$0")
+CMD_ARGS="${CMD_NAME}${*:+ $*}"
+readonly CMD_NAME CMD_ARGS
+
+declare -r -A MONTH_MAP=(
+  [Jan]=01 [Feb]=02 [Mar]=03 [Apr]=04 [May]=05 [Jun]=06
+  [Jul]=07 [Aug]=08 [Sep]=09 [Oct]=10 [Nov]=11 [Dec]=12
+)
+PRIVATE_IP_REGEX='^192[.]168[.]|^10[.]|^172[.](1[6-9]|2[0-9]|3[0-1])[.]|^127[.]'
+readonly PRIVATE_IP_REGEX
+
+# Fixed path to the configuration file sourced on startup.
+readonly UFWCHECK_CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/ufwcheck/config"
+
+# Temporary files declared global for EXIT trap access in main().
+TMP_IPS=""
+TMP_OUT=""
+
+# ==============================================================================
+# FUNCTIONS
+# ==============================================================================
+
+# ==============================================================================
+# Description:
+#   Prints the help message and usage examples, then exits.
+# ==============================================================================
+print_help() {
+  cat << EOF
+Usage: ufwcheck [OPTIONS]
+
+Analyzes UFW logs to identify and report on IPs with multiple block events.
+
+Filtering Options:
+  --today                Analyze today's log entries (default).
+  --date YYYY-MM-DD      Filter by a specific date.
+  --days N, -d N         Filter logs for the last N days.
+  --month NAME, -m NAME  Filter by month abbreviation (e.g., Jan, Feb, etc.).
+  --no-private           Exclude private/local network IP addresses from analysis.
+
+Output Options:
+  --top N, -t N          Show only the top N IPs by attempt count.
+  --attempts N, -a N     Show only IPs with at least N blocked attempts (default: 2).
+  --json                 Output results in JSON format instead of a table.
+
+Other Options:
+  --help, -h             Display this help message and exit.
+
+Examples:
+  ufwcheck                                  # Today's logs, IPs with >= 2 attempts.
+  ufwcheck -t 10                            # Today's logs, top 10 IPs.
+  ufwcheck -a 50                            # Today's logs, >= 50 attempts.
+  ufwcheck --no-private                     # Today's logs, external IPs only (no private networks).
+  ufwcheck -m Jul -t 30                     # All IPs for July, top 30 IPs.
+  ufwcheck -d 7 -a 5 -t 20                  # Last 7 days, >= 5 attempts, top 20 IPs.
+  ufwcheck --date 2025-07-26                # All IPs for a specific date.
+  ufwcheck --date 2025-07-26 --json         # All IPs for a specific date in JSON format.
+  ufwcheck --date 2025-07-26 -t 10 -a 100   # IPs for a specific date, top 10 IPs, >= 100 attempts.
+EOF
+  exit 0
+}
+
+# ==============================================================================
+# Description:
+#   Validates that the given value is a positive integer.
+#   Exits with code 2 if validation fails.
+#
+# Args:
+#   $1 - The value to check.
+#   $2 - The flag name to include in the error message (e.g., '--days').
+# ==============================================================================
+validate_positive_integer() {
+  local value="$1"
+  local flag_name="$2"
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[✘] Error: The value for '$flag_name' must be a positive integer. Got: '$value'" >&2
+    exit 2
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Checks if all required command-line tools are installed.
+#   Exits with code 1 if any dependency is missing.
+# ==============================================================================
+check_dependencies() {
+  local missing_deps=0
+  for cmd in grep awk sort head column python3 jq zcat; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "[✘] Error: Required command not found: '$cmd'. Please install it." >&2
+      missing_deps=$((missing_deps + 1))
+    fi
+  done
+  if ((missing_deps > 0)); then
+    exit 1
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Checks the primary UFW log file for null bytes, which can appear after an
+#   unclean system shutdown and cause grep to treat the file as binary, silently
+#   producing no results.
+#   Only the active log file is checked; rotated compressed archives (.gz) are
+#   not affected by this issue.
+#   Exits with code 1 if null bytes are detected.
+#
+# Globals:
+#   LOG_FILE
+# ==============================================================================
+check_log_integrity() {
+  if [[ ! -f "$LOG_FILE" ]]; then
+    return 0
+  fi
+
+  if cat -v "$LOG_FILE" | grep -q '\^@'; then
+    echo "[✘] Error: Null bytes detected in '$LOG_FILE'." >&2
+    echo "    This is typically caused by an unclean system shutdown." >&2
+    echo "    To fix, see: https://github.com/aymonix/ufwcheck/blob/main/docs/troubleshooting.md" >&2
+    exit 1
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Streams UFW log content to STDOUT.
+#   In 'today' mode: reads only active logs (ufw.log and ufw.log.1) for speed.
+#   In other modes: reads ALL rotated archives using zcat for full history.
+#
+# Globals:
+#   LOG_FILE, mode
+# ==============================================================================
+ufw_log_stream() {
+  local log_dir
+  local log_base
+
+  log_dir=$(dirname "$LOG_FILE")
+  log_base=$(basename "$LOG_FILE")
+
+  if [[ "$mode" == "today" ]]; then
+     if [[ -f "$LOG_FILE" ]]; then cat "$LOG_FILE"; fi
+     if [[ -f "${LOG_FILE}.1" ]]; then zcat -f "${LOG_FILE}.1"; fi
+     return
+  fi
+
+  # Find order irrelevant; sorting happens downstream.
+  find "$log_dir" -maxdepth 1 -name "${log_base}*" -print0 | xargs -0 zcat -f
+}
+
+# ==============================================================================
+# Description:
+#   Reads UFW BLOCK entries from stdin, counts occurrences per IP, and outputs
+#   a list of "count ip" lines. Optionally filters out private network addresses.
+#
+# Args:
+#   $1 - Filter private IPs flag ("true" or "false").
+#   $2 - Minimum attempt count for an IP to be included.
+# ==============================================================================
+process_logs() {
+  local filter_private="$1"; shift
+  local min_attempts="$1"; shift
+
+  awk -v filter_private="$filter_private" \
+      -v min_attempts="$min_attempts" \
+      -v private_ip_regex="$PRIVATE_IP_REGEX" '
+    /UFW BLOCK/ {
+        for(i=1; i<=NF; i++) {
+            if ($i ~ /^SRC=/) {
+                ip = $i;
+                sub("SRC=", "", ip);
+
+                if (filter_private == "true" && ip ~ private_ip_regex) {
+                    next;
+                }
+
+                counts[ip]++;
+                break;
+            }
+          }
+    }
+    END {
+        for (ip in counts) {
+            if (counts[ip] >= min_attempts) {
+                print counts[ip], ip;
+            }
+        }
+    }
+  '
+}
+
+# ==============================================================================
+# Description:
+#   Loads configuration, verifies log and database access, and checks log
+#   integrity. Exits if any check fails.
+#
+# Globals:
+#   UFWCHECK_CONFIG_FILE, LOG_FILE, MMDB_FILE, STATE_DIR
+# ==============================================================================
+check_environment() {
+  check_dependencies
+
+  if [[ ! -f "$UFWCHECK_CONFIG_FILE" || ! -r "$UFWCHECK_CONFIG_FILE" ]]; then
+    echo "[✘] Error: Configuration file not found or not readable at '$UFWCHECK_CONFIG_FILE'." >&2
+    echo "    Please create it based on the example in the README file." >&2
+    exit 1
+  fi
+
+  # shellcheck source=/dev/null
+  source "$UFWCHECK_CONFIG_FILE"
+
+  local log_dir
+  log_dir=$(dirname "$LOG_FILE")
+
+  # Verify directory access before dynamic file resolution.
+  if [[ ! -d "$log_dir" || ! -r "$log_dir" || ! -x "$log_dir" ]]; then
+      echo "[✘] Error: UFW log directory not found or not readable at '$log_dir'." >&2
+      exit 1
+  fi
+  if [[ ! -r "$MMDB_FILE" ]]; then
+      echo "[✘] Error: GeoIP database not found or not readable at '$MMDB_FILE'." >&2
+      exit 1
+  fi
+
+  # Check log integrity after config is loaded and LOG_FILE path is known.
+  check_log_integrity
+
+  mkdir -p "$STATE_DIR"
+}
+
+# ==============================================================================
+# Description:
+#   Validates that a required argument was provided for a flag.
+#   Exits with code 2 if the argument is empty.
+#
+# Args:
+#   $1 - The option name (e.g., '--days').
+#   $2 - The argument value to check.
+# ==============================================================================
+require_argument() {
+  local option="$1"
+  local argument="$2"
+  if [[ -z "$argument" ]]; then
+    echo "[✘] Error: Option '$option' requires an argument." >&2
+    exit 2
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Parses command-line arguments and sets option variables in the caller's
+#   scope. Exits with code 2 on any parsing or validation failure.
+#
+# Args:
+#   $@ - The full list of command-line arguments.
+# ==============================================================================
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    local current_option="$1"
+    case "$current_option" in
+      --today)
+        mode="today"; shift
+        ;;
+      --date)
+        require_argument "$current_option" "${2-}"
+        mode="date"; value="$2"; shift 2
+        ;;
+      --days|-d)
+        require_argument "$current_option" "${2-}"
+        mode="days"; value="$2"; shift 2
+        ;;
+      --month|-m)
+        require_argument "$current_option" "${2-}"
+        mode="month"; value="$2"; shift 2
+        ;;
+      --top|-t)
+        require_argument "$current_option" "${2-}"
+        top_limit="$2"; shift 2
+        ;;
+      --attempts|-a)
+        require_argument "$current_option" "${2-}"
+        min_attempts="$2"; shift 2
+        ;;
+      --json)
+        json_mode="true"; shift
+        ;;
+      --no-private)
+        filter_private="true"; shift
+        ;;
+      --help|-h)
+        print_help
+        ;;
+      *)
+        echo "[✘] Error: Unknown option '$current_option'. Use --help for usage." >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  if [[ "$mode" == "days" ]]; then
+    validate_positive_integer "$value" "--days"
+
+    # Limit analysis to 366 days to prevent regex performance degradation.
+    if (( value > 366 )); then
+      echo "[✘] Error: Maximum allowed value for '--days' is 366. Got: '$value'" >&2
+      exit 2
+    fi
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Enriches raw "count ip" data with GeoIP information (country, city) using
+#   an embedded Python script for batch processing.
+#   Outputs a tab-separated stream of "ip\tcount\tcountry\tcity" to STDOUT.
+#
+# Args:
+#   $1 - Path to the file containing raw "count ip" data.
+#
+# Globals:
+#   MMDB_FILE
+# ==============================================================================
+geo_data() {
+  local input_file="$1"
+  python3 -c '
+import sys
+import maxminddb
+
+try:
+    reader = maxminddb.open_database(sys.argv[1])
+except Exception as e:
+    print(f"ERROR: Failed to open GeoIP database: {e}", file=sys.stderr)
+    sys.exit(1)
+
+for line in sys.stdin:
+    try:
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+
+        count = parts[0]
+        ip = parts[1]
+
+        country = "-"
+        city = "-"
+
+        rec = reader.get(ip)
+
+        if rec:
+            try:
+                country = rec["country"]["names"]["en"]
+            except KeyError:
+                pass
+
+            try:
+                city = rec["city"]["names"]["en"]
+            except KeyError:
+                pass
+
+        print(f"{ip}\t{count}\t{country}\t{city}")
+
+    except Exception:
+        # Skip malformed lines or lookup errors to keep stream alive
+        continue
+' "$MMDB_FILE" < "$input_file"
+}
+
+# ==============================================================================
+# Description:
+#   Formats enriched GeoIP data as a JSON array sorted by attempt count.
+#
+# Args:
+#   $1 - Path to the file containing raw "count ip" data.
+# ==============================================================================
+format_json() {
+  local input_file="$1"
+
+  geo_data "$input_file" | jq -R -s '
+    split("\n") | .[0:-1] | map(
+      split("\t") | {
+        ip: .[0],
+        attempts: .[1] | tonumber,
+        country: .[2],
+        city: (if .[3] == "-" then null else .[3] end)
+      }
+    ) | sort_by(-.attempts)
+  '
+  echo "JSON output generated successfully." >&2
+}
+
+# ==============================================================================
+# Description:
+#   Formats enriched GeoIP data as an aligned table and appends it to the log.
+#
+# Args:
+#   $1 - Path to the file containing raw "count ip" data.
+#   $2 - Path to the temporary file used for building the table output.
+#
+# Globals:
+#   CMD_ARGS, OUTPUT_LOG
+# ==============================================================================
+format_table() {
+  local input_file="$1"
+  local output_file="$2"
+  local date_label
+
+  geo_data "$input_file" > "$output_file"
+
+  date_label="[$(LC_TIME=C date '+%Y-%m-%d %H:%M')]"
+  echo
+  echo "$date_label"
+  printf "\n[COMMAND] %s\n" "$CMD_ARGS" >> "$OUTPUT_LOG"
+  echo "$date_label" >> "$OUTPUT_LOG"
+
+  if [[ -s "$output_file" ]]; then
+      (
+        printf "IP Address\tAttempts\tCountry\tCity\n"
+        printf -- "--------------\t----------\t--------------\t----------\n"
+        cat "$output_file"
+      ) | column -t -s $'\t' -o "  " | tee -a "$OUTPUT_LOG"
+  else
+      echo "No IPs found matching the specified criteria." | tee -a "$OUTPUT_LOG"
+  fi
+
+  echo "-------------------------------------------------------" | tee -a "$OUTPUT_LOG"
+  echo
+}
+
+# ==============================================================================
+# Description:
+#   Filters and processes UFW log entries into a temporary file based on the
+#   current mode and options.
+#
+# Args:
+#   $1 - Path to the temporary file where processed IP data will be stored.
+#
+# Globals:
+#   LOG_FILE, MONTH_MAP, mode, value, top_limit
+# ==============================================================================
+extract_data() {
+  local input_file="$1"
+  local date_regex
+  local final_regex
+  local dates
+  local month_num
+  local limit_pipe=("cat")
+
+  case "$mode" in
+    today) date_regex="^$(LC_TIME=C date '+%Y-%m-%d')T";;
+    date)
+      if ! [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo "[✘] Error: Date must be in YYYY-MM-DD format. Got: '$value'" >&2
+        exit 2
+      fi
+      date_regex="^${value}T";;
+    days)
+      dates=()
+      for ((i=0; i<value; i++)); do dates+=("$(LC_TIME=C date -d "-$i day" '+%Y-%m-%d')"); done
+      date_regex=$(printf '^%sT|' "${dates[@]}"); date_regex=${date_regex%|};;
+    month)
+      month_num="${MONTH_MAP[$value]}"
+      if [[ -z "$month_num" ]]; then
+        echo "[✘] Error: Invalid month abbreviation '$value'. Use Jan, Feb, etc." >&2
+        exit 2
+      fi
+      date_regex="^....-${month_num}-[0-9][0-9]T";;
+  esac
+
+  if [[ -n "$top_limit" ]]; then
+    limit_pipe=("head" "-n" "$top_limit")
+  fi
+
+  final_regex="${date_regex}.*UFW BLOCK"
+
+  # Temporarily disable pipefail: 'head' closes the pipe early causing SIGPIPE
+  # in upstream processes. This is expected behavior, not an error.
+  # NOTE: real errors from grep/process_logs will NOT be caught in this block.
+  set +o pipefail
+
+  ufw_log_stream | grep -E "$final_regex" | \
+  process_logs "$filter_private" "$min_attempts" | \
+  sort -nr | \
+  "${limit_pipe[@]}" > "$input_file"
+
+  set -o pipefail
+}
+
+# ==============================================================================
+# Description:
+#   Orchestrates data extraction and report formatting.
+#
+# Args:
+#   $1 - Path to the temporary file for storing processed IP data.
+#   $2 - Path to the temporary file for building the table output.
+# ==============================================================================
+generate_report() {
+  local input_file="$1"
+  local output_file="$2"
+
+  extract_data "$input_file"
+
+  if [[ "$json_mode" == "true" ]]; then
+    format_json "$input_file"
+  else
+    format_table "$input_file" "$output_file"
+  fi
+}
+
+# ==============================================================================
+# Description:
+#   Main entry point. Initialises options, runs environment checks, parses
+#   arguments, and generates the report.
+# ==============================================================================
+main() {
+  local mode="today"
+  local value=""
+  local top_limit=""
+  local min_attempts=2
+  local json_mode="false"
+  local filter_private="false"
+
+  check_environment
+
+  TMP_IPS=$(mktemp "$STATE_DIR/ufw_ips.XXXXXX")
+  TMP_OUT=$(mktemp "$STATE_DIR/ufw_out.XXXXXX")
+  trap 'rm -f "$TMP_IPS" "$TMP_OUT"' EXIT
+
+  parse_arguments "$@"
+
+  if [[ -n "$top_limit" ]]; then
+    validate_positive_integer "$top_limit" "--top"
+  fi
+
+  validate_positive_integer "$min_attempts" "--attempts"
+
+  generate_report "$TMP_IPS" "$TMP_OUT"
+}
+
+
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
