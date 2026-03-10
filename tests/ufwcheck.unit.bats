@@ -5,6 +5,9 @@ load "${BATS_TEST_DIRNAME}/test_helper/bats-assert/load.bash"
 
 setup() {
   export HOME="$(mktemp -d)"
+  export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_DATA_HOME="$HOME/.local/share"
+  export XDG_STATE_HOME="$HOME/.local/state"
   export STUB_DIR="$(mktemp -d)"
   export PATH="$STUB_DIR:$PATH"
 }
@@ -14,23 +17,33 @@ teardown() {
   rm -rf "$HOME" "$STUB_DIR"
 }
 
+run_isolated() {
+  run env -i \
+      HOME="$HOME" \
+      XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+      XDG_DATA_HOME="$XDG_DATA_HOME" \
+      XDG_STATE_HOME="$XDG_STATE_HOME" \
+      PATH="$PATH" \
+      bash -c "$@"
+}
+
 # --- TESTS ---
 
 # BASIC FUNCTIONALITY
 
 @test "ufwcheck.unit: print_help() - when called - should display usage and exit 0" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     print_help
   '
 
   assert_success
-  assert_output --partial "Usage: ufwcheck.sh"
+  assert_output --partial "Usage: ufwcheck"
 }
 
 @test "ufwcheck.unit: validate_positive_integer() - with valid input - should exit 0" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     validate_positive_integer "10" "--top"
   '
 
@@ -40,7 +53,7 @@ teardown() {
 
 @test "ufwcheck.unit: validate_positive_integer() - with invalid input - should print error and exit 2" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     validate_positive_integer "abc" "--top"
   '
 
@@ -52,7 +65,7 @@ teardown() {
   run bash -c '
     # Mock command to always succeed, simulating installed tools.
     command() { return 0; }
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     check_dependencies
   '
 
@@ -68,7 +81,7 @@ teardown() {
       fi
       return 0
     }
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     check_dependencies
   '
 
@@ -76,33 +89,36 @@ teardown() {
   assert_output --partial "Required command not found: 'jq'"
 }
 
+@test "ufwcheck.unit: check_log_integrity() - when null bytes detected - should print error and exit 1" {
+  local log_file="$HOME/ufw.log"
+  printf "normal line\n\x00corrupted\n" > "$log_file"
+
+  run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
+    export LOG_FILE="'"$log_file"'"
+    check_log_integrity
+  '
+
+  assert_failure 1
+  assert_output --partial "Null bytes detected"
+}
+
 @test "ufwcheck.unit: check_environment() - when log dir is inaccessible - should exit 1" {
-  # Create a directory with no permissions (000) to trigger -r/-x checks.
   local restricted_dir="$HOME/restricted_logs"
   mkdir -p "$restricted_dir"
   chmod 000 "$restricted_dir"
 
-  # Pass dummy script name ($0) and directory ($1) to avoid basename errors.
-  run bash -c '
-    target_dir="$1"
-
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
-    
-    # Mock dependencies to bypass that check.
+  run_isolated '
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     check_dependencies() { return 0; }
-    
-    # Ensure config dir exists before creating file (config path is internal to script).
     mkdir -p "$(dirname "$UFWCHECK_CONFIG_FILE")"
-
     cat > "$UFWCHECK_CONFIG_FILE" <<EOF
-LOG_FILE="$target_dir/ufw.log"
-MMDB_FILE="$HOME/db.mmdb"
+LOG_FILE="'"$restricted_dir"'/ufw.log"
+MMDB_FILE="'"$HOME"'/db.mmdb"
 EOF
-    
     check_environment
-  ' "ufwcheck_mock" "$restricted_dir"
-  
-  # Cleanup permissions so teardown can remove it.
+  '
+
   chmod 700 "$restricted_dir"
 
   assert_failure 1
@@ -113,7 +129,7 @@ EOF
 
 @test "ufwcheck.unit: parse_arguments() - with combined flags - should set all variables correctly and exit 0" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     parse_arguments -d 7 --json -t 20 --no-private
     
     # Dump internal state to stdout for verification.
@@ -134,7 +150,7 @@ EOF
 
 @test "ufwcheck.unit: parse_arguments() - with flag missing argument - should print error and exit 2" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     parse_arguments --days
   '
 
@@ -144,7 +160,7 @@ EOF
 
 @test "ufwcheck.unit: parse_arguments() - with unknown flag - should print error and exit 2" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     parse_arguments --nonexistent-flag
   '
 
@@ -154,7 +170,7 @@ EOF
 
 @test "ufwcheck.unit: parse_arguments() - with --days > 366 - should print error and exit 2" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     parse_arguments --days 400
   '
 
@@ -174,7 +190,7 @@ EOF
   echo "DATA_OLD" | gzip > "$mock_dir/ufw.log.2.gz"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     export LOG_FILE="'"$mock_dir"'/ufw.log"
     mode="today"
     
@@ -197,7 +213,7 @@ EOF
   echo "DATA_OLD" | gzip > "$mock_dir/ufw.log.2.gz"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     export LOG_FILE="'"$mock_dir"'/ufw.log"
     mode="days"
     
@@ -363,10 +379,10 @@ EOF
   tmp_ips_file=$(mktemp)
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
     eval "$1"
     format_json "'"$tmp_ips_file"'"
-  ' -- "$geo_data_override"
+  ' "ufwcheck" "$geo_data_override"
   
   rm "$tmp_ips_file"
 
@@ -400,11 +416,11 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       format_json "'"$tmp_ips_file"'"
     } 2>/dev/null
-  ' -- "$geo_data_override"
+  ' "ufwcheck" "$geo_data_override"
   
   rm "$tmp_ips_file"
 
@@ -435,7 +451,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       export OUTPUT_LOG="/dev/null"
       
@@ -472,7 +488,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       export OUTPUT_LOG="/dev/null"
       format_table "/dev/null" "$2"
@@ -531,7 +547,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1" # Apply date mock
       eval "$2" # Apply ufw_stream mock
       unset -f process_logs
@@ -584,7 +600,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       unset -f process_logs
       
@@ -647,7 +663,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       eval "$2"
       unset -f process_logs
@@ -701,7 +717,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       unset -f process_logs
 
@@ -767,7 +783,7 @@ EOF
 
   run bash -c '
     {
-      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh"
+      source "'"$BATS_TEST_DIRNAME"'/../ufwcheck"
       eval "$1"
       unset -f process_logs
       
@@ -810,7 +826,7 @@ EOF
   # CASE 1: Invalid Date Format
   run bash -c '
     exec 2> "$3"
-    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh")
+    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck")
     eval "$1"
     
     export LOG_FILE="/dev/null"
@@ -829,7 +845,7 @@ EOF
   # CASE 2: Invalid Month Name
   run bash -c '
     exec 2> "$3"
-    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck.sh")
+    source <(sed "\$d" "'"$BATS_TEST_DIRNAME"'/../ufwcheck")
     eval "$1"
     
     export LOG_FILE="/dev/null"

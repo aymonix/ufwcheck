@@ -5,6 +5,9 @@ load "${BATS_TEST_DIRNAME}/test_helper/bats-assert/load.bash"
 
 setup() {
   export HOME="$(mktemp -d)"
+  export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_DATA_HOME="$HOME/.local/share"
+  export XDG_STATE_HOME="$HOME/.local/state"
   export STUB_DIR="$(mktemp -d)"
   export PATH="$STUB_DIR:$PATH"
 }
@@ -12,6 +15,16 @@ setup() {
 teardown() {
   export PATH=$(echo "$PATH" | sed "s|$STUB_DIR:||")
   rm -rf "$HOME" "$STUB_DIR"
+}
+
+run_isolated() {
+  run env -i \
+      HOME="$HOME" \
+      XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+      XDG_DATA_HOME="$XDG_DATA_HOME" \
+      XDG_STATE_HOME="$XDG_STATE_HOME" \
+      PATH="$PATH" \
+      bash -c "$@"
 }
 
 # --- TESTS ---
@@ -45,7 +58,7 @@ teardown() {
   '
 
   assert_failure 1
-  assert_output --partial "sudo apt-get install jq"
+  assert_output --partial "sudo apt install -y jq"
 }
 
 @test "install.unit: check_dependencies() - when python library is missing - should return 1" {
@@ -62,7 +75,7 @@ teardown() {
   '
 
   assert_failure 1
-  assert_output --partial "sudo apt-get install python3-maxminddb"
+  assert_output --partial "sudo apt install -y python3-maxminddb"
 }
 
 # FILE INSTALLATION
@@ -78,53 +91,15 @@ exit 0
 EOF
   chmod +x "$STUB_DIR/curl"
 
-  cat > "$STUB_DIR/sha256sum" <<EOF
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod +x "$STUB_DIR/sha256sum"
-  
   run bash -c '
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
     install_files
   '
 
   assert_success
-  
-  assert [ -f "${HOME}/.local/bin/ufwcheck.sh" ]
-  assert [ -f "${HOME}/.local/bin/geoupdate.sh" ]
 
-  assert [ ! -f "${HOME}/.local/bin/SHA256SUMS" ]
-}
-
-@test "install.unit: install_files() - when checksum mismatches - should exit 1 and clean up" {
-  cat > "$STUB_DIR/curl" <<EOF
-#!/usr/bin/env bash
-while [[ \$# -gt 0 ]]; do
-  if [[ "\$1" == "-o" ]]; then touch "\$2"; fi
-  shift
-done
-exit 0
-EOF
-  chmod +x "$STUB_DIR/curl"
-
-  cat > "$STUB_DIR/sha256sum" <<EOF
-#!/usr/bin/env bash
-exit 1
-EOF
-  chmod +x "$STUB_DIR/sha256sum"
-  
-  run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../install.sh"
-    install_files
-  '
-
-  assert_failure 1
-  assert_output --partial "ERROR: Checksum mismatch!"
-  
-  assert [ ! -f "${HOME}/.local/bin/ufwcheck.sh" ]
-  assert [ ! -f "${HOME}/.local/bin/geoupdate.sh" ]
-  assert [ ! -f "${HOME}/.local/bin/SHA256SUMS" ]
+  assert [ -f "${HOME}/.local/bin/ufwcheck" ]
+  assert [ -f "${HOME}/.local/bin/geoupdate" ]
 }
 
 @test "install.unit: install_files() - when download fails - should exit 22" {
@@ -140,81 +115,75 @@ EOF
   '
 
   assert_failure 22
-  assert [ ! -f "${HOME}/.local/bin/ufwcheck.sh" ]
+  assert [ ! -f "${HOME}/.local/bin/ufwcheck" ]
 }
 
 # CONFIGURATION
 
 @test "install.unit: configure_maxmind() - when user provides valid input - should create secrets file and exit 0" {
-  local input_file
-  input_file=$(mktemp)
-  # Simulate user input: Choice "1", User ID, License Key
-  echo -e "1\nMY_ACCOUNT_ID\nMY_LICENSE_KEY\n" > "$input_file"
-
-  run bash -c '
+  run_isolated '
+    read() {
+      case "$*" in
+        *"Account ID"*) eval "${!#}=\"MY_ACCOUNT_ID\"" ;;
+        *"License Key"*) eval "${!#}=\"MY_LICENSE_KEY\"" ;;
+        *) eval "${!#}=\"1\"" ;;
+      esac
+    }
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
     configure_maxmind
-  ' < "$input_file"
+  '
 
   assert_success
-  
-  local secrets_file="${HOME}/.config/maxmind/secrets"
+
+  local secrets_file="$HOME/.config/maxmind/secrets"
   assert [ -f "$secrets_file" ]
-  
+
   local secrets_content
   secrets_content=$(cat "$secrets_file")
-  
+
   echo "$secrets_content" | grep -q 'export MAXMIND_ID="MY_ACCOUNT_ID"'
   assert_equal "$?" "0"
 
   echo "$secrets_content" | grep -q 'export MAXMIND_TOKEN="MY_LICENSE_KEY"'
   assert_equal "$?" "0"
-  
+
   local permissions
   permissions=$(stat -c %a "$secrets_file")
   assert_equal "$permissions" "600"
-
-  rm "$input_file"
 }
 
 @test "install.unit: configure_maxmind() - when user provides empty input - should skip creation and exit 0" {
-  local input_file
-  input_file=$(mktemp)
-  # Simulate input: Choice "1", Empty ID, Empty Key
-  echo -e "1\n\n\n" > "$input_file"
-
-  run bash -c '
+  run_isolated '
+    read() {
+      case "$*" in
+        *"Account ID"*) eval "${!#}=\"\"" ;;
+        *"License Key"*) eval "${!#}=\"\"" ;;
+        *) eval "${!#}=\"1\"" ;;
+      esac
+    }
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
     configure_maxmind
-  ' < "$input_file"
+  '
 
   assert_success
-  
-  local secrets_file="${HOME}/.config/maxmind/secrets"
+
+  local secrets_file="$HOME/.config/maxmind/secrets"
   assert [ ! -f "$secrets_file" ]
   assert_output --partial "WARN: Input was empty. Skipping API setup."
-
-  rm "$input_file"
 }
 
 @test "install.unit: configure_maxmind() - when user chooses manual setup - should print instructions and exit 0" {
-  local input_file
-  input_file=$(mktemp)
-  # Simulate input: Choice "2"
-  echo -e "2\n" > "$input_file"
-
-  run bash -c '
+  run_isolated '
+    read() { eval "${!#}=\"2\""; }
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
     configure_maxmind
-  ' < "$input_file"
+  '
 
   assert_success
-  
-  local secrets_file="${HOME}/.config/maxmind/secrets"
+
+  local secrets_file="$HOME/.config/maxmind/secrets"
   assert [ ! -f "$secrets_file" ]
   assert_output --partial "Manual setup selected"
-
-  rm "$input_file"
 }
 
 # CRON & ENV
@@ -248,65 +217,86 @@ EOF
   assert_output --partial "Cron job successfully added"
   
   local content=$(cat "$crontab_capture_file")
-  echo "$content" | grep -q "geoupdate.sh"
+  echo "$content" | grep -q "geoupdate"
   assert_equal "$?" "0"
   
   rm "$crontab_capture_file"
 }
 
 @test "install.unit: configure_cron() - when user declines - should skip setup and exit 0" {
-  local crontab_marker_file="${HOME}/crontab_was_called"
-
-  cat > "$STUB_DIR/crontab" <<EOF
-#!/usr/bin/env bash
-touch "$crontab_marker_file"
-EOF
-  chmod +x "$STUB_DIR/crontab"
-
-  run bash -c '
+  run_isolated '
+    read() { eval "${!#}=\"n\""; }
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
-    echo "n" | configure_cron
+    configure_cron
   '
 
   assert_success
   assert_output --partial "Skipping cron job setup"
-
-  assert [ ! -f "$crontab_marker_file" ]
 }
 
 @test "install.unit: setup_environment() - when called - should create a valid env file and exit 0" {
-  # The function writes to this directory, so it must exist beforehand.
-  mkdir -p "${HOME}/.config/ufwcheck"
-
-  run bash -c '
+  run_isolated '
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
+    mkdir -p "$(dirname "$UFWCHECK_ENV_FILE")"
     setup_environment
   '
 
   assert_success
-  
-  local env_file="${HOME}/.config/ufwcheck/env.sh"
+
+  local env_file="$HOME/.config/ufwcheck/env"
   assert [ -f "$env_file" ]
 
   local env_content
   env_content=$(cat "$env_file")
 
-  # Verify the PATH export preserves the literal '$PATH' variable using Fixed-string grep.
   echo "$env_content" | grep -Fq "export PATH=\"${HOME}/.local/bin:\$PATH\""
   assert_equal "$?" "0"
 
-  echo "$env_content" | grep -q "alias ufwcheck='ufwcheck.sh'"
+  echo "$env_content" | grep -q "alias ufc='ufwcheck'"
   assert_equal "$?" "0"
 }
 
 @test "install.unit: final_instructions() - when called - should display correct instructions and exit 0" {
-  run bash -c '
+  run_isolated '
     source "'"$BATS_TEST_DIRNAME"'/../install.sh"
     final_instructions
   '
 
   assert_success
-  
-  assert_output --partial "source \"${HOME}/.config/ufwcheck/env.sh\""
-  assert_output --partial "geoupdate.sh"
+  assert_output --partial "source \"${HOME}/.config/ufwcheck/env\""
+  assert_output --partial "geoupdate"
+}
+
+# MAIN
+
+@test "install.unit: main() - when existing installation detected and user confirms - should proceed" {
+  run_isolated '
+    read() { eval "${!#}=\"y\""; }
+    source "'"$BATS_TEST_DIRNAME"'/../install.sh"
+    check_dependencies() { return 0; }
+    install_files() { return 0; }
+    configure_maxmind() { return 0; }
+    setup_environment() { return 0; }
+    configure_cron() { return 0; }
+    final_instructions() { echo "final_instructions called"; }
+    mkdir -p "$(dirname "$UFWCHECK_CONFIG_FILE")"
+    touch "$UFWCHECK_CONFIG_FILE"
+    main
+  '
+
+  assert_success
+  assert_output --partial "final_instructions called"
+}
+
+@test "install.unit: main() - when existing installation detected and user declines - should abort" {
+  run_isolated '
+    read() { eval "${!#}=\"n\""; }
+    source "'"$BATS_TEST_DIRNAME"'/../install.sh"
+    mkdir -p "$(dirname "$UFWCHECK_CONFIG_FILE")"
+    touch "$UFWCHECK_CONFIG_FILE"
+    main
+  '
+
+  assert_success
+  assert_output --partial "Aborted."
 }

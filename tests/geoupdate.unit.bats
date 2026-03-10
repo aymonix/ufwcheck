@@ -5,6 +5,9 @@ load "${BATS_TEST_DIRNAME}/test_helper/bats-assert/load.bash"
 
 setup() {
   export HOME="$(mktemp -d)"
+  export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_DATA_HOME="$HOME/.local/share"
+  export XDG_STATE_HOME="$HOME/.local/state"
   export STUB_DIR="$(mktemp -d)"
   export PATH="$STUB_DIR:$PATH"
 }
@@ -14,11 +17,21 @@ teardown() {
   rm -rf "$HOME" "$STUB_DIR"
 }
 
+run_isolated() {
+  run env -i \
+      HOME="$HOME" \
+      XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+      XDG_DATA_HOME="$XDG_DATA_HOME" \
+      XDG_STATE_HOME="$XDG_STATE_HOME" \
+      PATH="$PATH" \
+      bash -c "$@"
+}
+
 # --- TESTS ---
 
 @test "geoupdate.unit: check_dependencies() - when all dependencies exist - should exit 0" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     command() { return 0; }
     check_dependencies
   '
@@ -28,7 +41,7 @@ teardown() {
 
 @test "geoupdate.unit: check_dependencies() - when a dependency is missing - should print error and exit 1" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     
     # Mock failure specifically for "curl" to verify error handling logic.
     command() {
@@ -45,10 +58,10 @@ teardown() {
 
 @test "geoupdate.unit: run_update() - with missing credentials - should print error and exit 1" {
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     
     # Initialize required globals to satisfy set -u, but leave credentials unset.
-    export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     
     run_update
@@ -75,31 +88,36 @@ exit 0
 EOF
   chmod +x "$STUB_DIR/sha256sum"
 
-  # Return a safe filename to pass the "Tar Slip" security check.
   cat > "$STUB_DIR/tar" <<EOF
 #!/usr/bin/env bash
 if [[ "\$1" == "-tf" ]]; then
   echo "GeoLite2-City.mmdb"
+elif [[ "\$1" == "-xzf" ]]; then
+  extract_dir=""
+  while [[ \$# -gt 0 ]]; do
+    if [[ "\$1" == "-C" ]]; then extract_dir="\$2"; fi
+    shift
+  done
+  mkdir -p "\$extract_dir"
+  touch "\$extract_dir/GeoLite2-City.mmdb"
 fi
 exit 0
 EOF
   chmod +x "$STUB_DIR/tar"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
-    
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
+
     export MAXMIND_ID="test_user"
     export MAXMIND_TOKEN="test_key"
-    export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     export DOWNLOAD_URL="http://mock.url/db"
     export SHA_URL="http://mock.url/sha"
-    
+
     mkdir -p "$STATE_DIR"
-    
-    # Initialize global variable to prevent "unbound variable" error in EXIT trap.
-    tmp_dir=""
-    
+    TMP_DIR=""
+
     run_update
   '
 
@@ -116,17 +134,17 @@ EOF
   chmod +x "$STUB_DIR/curl"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     
     export MAXMIND_ID="test_user"
     export MAXMIND_TOKEN="test_key"
-    export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     export DOWNLOAD_URL="http://mock.url/db"
     export SHA_URL="http://mock.url/sha"
     
     mkdir -p "$STATE_DIR"
-    tmp_dir=""
+    TMP_DIR=""
     
     run_update
   '
@@ -154,17 +172,17 @@ EOF
   chmod +x "$STUB_DIR/sha256sum"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     
     export MAXMIND_ID="test_user"
     export MAXMIND_TOKEN="test_key"
-    export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     export DOWNLOAD_URL="http://mock.url/db"
     export SHA_URL="http://mock.url/sha"
     
     mkdir -p "$STATE_DIR"
-    tmp_dir=""
+    TMP_DIR=""
     
     run_update
   '
@@ -204,17 +222,17 @@ EOF
   chmod +x "$STUB_DIR/tar"
 
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     
     export MAXMIND_ID="test_user"
     export MAXMIND_TOKEN="test_key"
-    export MMDB_FILE="${HOME}/GeoLite2-City.mmdb"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
     export STATE_DIR="${HOME}/.local/state"
     export DOWNLOAD_URL="http://mock.url/db"
     export SHA_URL="http://mock.url/sha"
     
     mkdir -p "$STATE_DIR"
-    tmp_dir=""
+    TMP_DIR=""
     
     run_update
   '
@@ -224,13 +242,63 @@ EOF
   refute_output --partial "SECURITY FAIL"
 }
 
-@test "geoupdate.unit: main() - with missing config files - should print error and exit 1" {
+@test "geoupdate.unit: run_update() - when mmdb not found after extraction - should print error and exit 1" {
+  cat > "$STUB_DIR/curl" <<EOF
+#!/usr/bin/env bash
+while [[ \$# -gt 0 ]]; do
+  if [[ "\$1" == "-o" ]]; then touch "\$2"; fi
+  shift
+done
+exit 0
+EOF
+  chmod +x "$STUB_DIR/curl"
+
+  cat > "$STUB_DIR/sha256sum" <<EOF
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$STUB_DIR/sha256sum"
+
+  cat > "$STUB_DIR/tar" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "-tf" ]]; then
+  echo "GeoLite2-City.mmdb"
+elif [[ "\$1" == "-xzf" ]]; then
+  extract_dir=""
+  while [[ \$# -gt 0 ]]; do
+    if [[ "\$1" == "-C" ]]; then extract_dir="\$2"; fi
+    shift
+  done
+  mkdir -p "\$extract_dir"
+fi
+exit 0
+EOF
+  chmod +x "$STUB_DIR/tar"
+
   run bash -c '
-    source "'"$BATS_TEST_DIRNAME"'/../geoupdate.sh"
-    
-    # Mock command check to bypass dependency validation and hit config check.
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
+
+    export MAXMIND_ID="test_user"
+    export MAXMIND_TOKEN="test_key"
+    export MMDB_FILE="${HOME}/.local/share/geoip/GeoLite2-City.mmdb"
+    export STATE_DIR="${HOME}/.local/state"
+    export DOWNLOAD_URL="http://mock.url/db"
+    export SHA_URL="http://mock.url/sha"
+
+    mkdir -p "$STATE_DIR"
+    TMP_DIR=""
+
+    run_update
+  '
+
+  assert_failure 1
+  assert_output --partial "ERROR: Extraction failed. GeoLite2-City.mmdb not found in archive."
+}
+
+@test "geoupdate.unit: main() - with missing config files - should print error and exit 1" {
+  run_isolated '
     command() { return 0; }
-    
+    source "'"$BATS_TEST_DIRNAME"'/../geoupdate"
     main
   '
 
