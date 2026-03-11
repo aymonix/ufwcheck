@@ -1,7 +1,7 @@
 # ufwcheck
 
 ![GitHub release](https://img.shields.io/github/v/release/aymonix/ufwcheck)
-![GitHub license](https://img.shields.io/github/license/aymonix/ufwcheck)
+![GitHub license](https://img.shields.io/github/license/aymonix/ufwcheck?cache_seconds=0)
 
 **ufwcheck** is a suite of `bash` utilities for analyzing UFW (Uncomplicated Firewall) logs, designed for Debian and Ubuntu environments. It identifies IP addresses with suspicious activity by scanning real-time logs and historical archives, enriches them with geolocation data, and presents the findings in ranked reports.
 
